@@ -1,110 +1,216 @@
-# CLIProxyAPI + OpenClaw 号池管理面板
+# CLIProxyAPI + OpenClaw 号池管理套件
 
-本项目用于把本地 `codex` 多账号会话接入 `CLIProxyAPI`，并提供一个前端运维面板来管理账号、模型、服务和日志。
+把本地多 Codex 账号会话接入 `CLIProxyAPI`，并提供一个可视化控制台用于管理服务、账号会话、模型与日志。
 
-## 功能
+本仓库已经包含两套可直接落地的一键部署方案：
 
-- 双账号会话同步：`sync_codex_auths.sh`
-- 本地代理健康检查：服务状态、端口监听、模型可用性
-- 账号会话可视化：邮箱、account_id（脱敏）、token 存在性
-- 一键运维：`start / stop / restart / sync`
-- 配置与日志快照（自动脱敏 `api-keys` / token 字段）
+- 本地一键部署（macOS/Linux 本机）
+- 腾讯云一键部署（本地发起远程部署 + 服务器端安装）
 
-## 目录
+## 截图
 
-- `server.js`: Dashboard 后端 API
-- `web/`: 前端页面
-- `sync_codex_auths.sh`: 把 Codex `auth.json` 转成 CLIProxyAPI auth 文件
-- `config.example.yaml`: CLIProxyAPI 示例配置
-- `.env.example`: Dashboard 环境变量示例
-- `scripts/oneclick-local.sh`: 本地一键部署
-- `scripts/oneclick-tencent-remote.sh`: 本地发起腾讯云一键部署
-- `scripts/oneclick-tencent-server.sh`: 腾讯云服务器端安装脚本（由 remote 脚本调用）
+### 控制台（桌面）
 
-## 一键部署（本地）
+![Dashboard Desktop](docs/screenshots/dashboard-desktop.png)
 
-1. 准备两个 Codex 账号会话
+### 控制台（移动端）
+
+![Dashboard Mobile](docs/screenshots/dashboard-mobile.png)
+
+## 主要能力
+
+- 双账号 Codex 会话同步：`sync_codex_auths.sh`
+- CLIProxyAPI 本地代理管理
+- Dashboard 可视化运维
+- 配置与日志脱敏展示
+- 一键部署脚本（本地 + 腾讯云）
+- 常见故障复盘与标准修复路径
+
+## 架构
+
+```mermaid
+flowchart LR
+  A["Codex Account 1"] --> B["auths/codex-acc1.json"]
+  C["Codex Account 2"] --> D["auths/codex-acc2.json"]
+  B --> E["CLIProxyAPI"]
+  D --> E
+  F["Dashboard (server.js)"] --> E
+  G["OpenClaw"] -->|"OPENAI_BASE_URL + API_KEY"| E
+  H["Nginx + TLS (Tencent) "] --> E
+  I["Other devices / clients"] --> H
+```
+
+## 仓库结构
+
+- `server.js` Dashboard 后端 API
+- `web/` Dashboard 前端
+- `sync_codex_auths.sh` 从 `CODEX_HOME/auth.json` 转换认证文件
+- `scripts/oneclick-local.sh` 本地一键部署
+- `scripts/oneclick-tencent-remote.sh` 本地发起腾讯云远程部署
+- `scripts/oneclick-tencent-server.sh` 腾讯云服务器端一键安装
+- `config.example.yaml` CLIProxyAPI 示例配置
+- `docs/oneclick-deploy.md` 部署与排障速查
+- `skills/openclaw-telegram-bot-triage/SKILL.md` Telegram 机器人故障排障 Skill
+
+## 环境要求
+
+- `codex` CLI（已登录两个账号）
+- `cliproxyapi` 二进制（本地或服务器可执行）
+- `node >= 18`
+- `npm`
+- `jq`
+- `curl`
+
+腾讯云额外要求：
+
+- Ubuntu 22.04+
+- `systemd`
+- 可选：`nginx`
+- 可选：`certbot`（启用 TLS 时）
+
+## 本地一键部署
+
+### 1) 准备两个账号登录
 
 ```bash
 CODEX_HOME=~/.codex-acc1 codex login
 CODEX_HOME=~/.codex-acc2 codex login
 ```
 
-2. 一键部署并启动（会自动同步 auth、写 config、拉依赖、启动 proxy + dashboard）
+### 2) 执行一键脚本
 
 ```bash
 bash scripts/oneclick-local.sh
 ```
 
-3. 打开页面：`http://127.0.0.1:8328`
+成功后默认地址：
 
-## 环境变量
+- Dashboard：`http://127.0.0.1:8328`
+- Proxy：`http://127.0.0.1:8317/v1`
 
-默认值见 `.env.example`。最常用的是：
-
-- `DASHBOARD_PORT`
-- `CLIPROXY_BASE_URL`
-- `CLIPROXY_PORT`
-- `CLIPROXY_SERVICE_NAME`
-- `SERVICE_MANAGER` (`brew` / `systemd`)
-
-本地一键脚本常用覆盖项：
-
-- `CODEX_ACC1_HOME` / `CODEX_ACC2_HOME`
-- `CLIPROXY_PORT`
-- `DASHBOARD_PORT`
-- `CLIPROXY_API_KEY`
-
-示例：
+### 3) 常用覆盖参数
 
 ```bash
-CLIPROXY_PORT=18317 DASHBOARD_PORT=18328 bash scripts/oneclick-local.sh
+CODEX_ACC1_HOME="$HOME/.codex-acc1" \
+CODEX_ACC2_HOME="$HOME/.codex-acc2" \
+CLIPROXY_PORT=18317 \
+DASHBOARD_PORT=18328 \
+CLIPROXY_API_KEY="replace-with-strong-key" \
+bash scripts/oneclick-local.sh
 ```
 
-## 安全注意事项
+## 腾讯云一键部署（推荐从本地发起）
 
-- 不要把以下文件提交到 Git：
-  - `auths/*.json`
-  - `config.yaml`
-  - 任意日志文件
-- 脚本和页面已做脱敏展示，但仓库中仍应只保存示例配置。
-
-## 一键部署（腾讯云）
-
-在本地执行（会自动打包二进制 + auth，并远程安装 systemd + nginx）：
+### 本地发起远程部署
 
 ```bash
-REMOTE_HOST=81.70.32.11 \
-REMOTE_USER=ubuntu \
-DOMAIN=api.yuchenxu.cn \
+REMOTE_HOST="81.70.32.11" \
+REMOTE_USER="ubuntu" \
+SSH_KEY_PATH="$HOME/.ssh/id_rsa" \
+DOMAIN="api.yuchenxu.cn" \
 ENABLE_TLS=1 \
-CERTBOT_EMAIL=you@example.com \
+CERTBOT_EMAIL="you@example.com" \
 bash scripts/oneclick-tencent-remote.sh
 ```
 
-可选参数：
+此流程会自动完成：
 
-- `SSH_KEY_PATH=~/.ssh/your-key`
-- `REMOTE_PORT=22`
-- `REMOTE_ROOT=/opt/openclaw-cliproxy-kit`
-- `CLIPROXY_PORT=15900`
-- `CLIPROXY_API_KEY=<your-key>`
-- `ENABLE_NGINX=1`
-- `RUN_USER=ubuntu`
+- 同步本地双账号 auth 文件
+- 上传 `cliproxyapi-linux-amd64`
+- 远端安装 systemd 服务 `cliproxyapi`
+- 可选配置 `nginx` 反代和 TLS 证书
 
-部署完成后：
+### 在服务器直接执行
 
-- 内网代理：`127.0.0.1:<CLIPROXY_PORT>`
-- 域名 API：`https://<DOMAIN>/v1`（开启 TLS 时）
+```bash
+CLIPROXY_API_KEY="replace-with-strong-key" \
+CLIPROXY_PORT=15900 \
+DOMAIN="api.your-domain.com" \
+ENABLE_NGINX=1 \
+ENABLE_TLS=1 \
+CERTBOT_EMAIL="you@example.com" \
+bash scripts/oneclick-tencent-server.sh
+```
 
-## 复盘问题（已修）
+## OpenClaw 接入方式
 
-- `Telegram getUpdates conflict (409)`：同一个 bot token 被多个进程同时 long polling。
-- `Missing config`：独立 bot 网关目录缺少 `clawdbot.json`。
-- `Invalid allowFrom entry`：`allowFrom/groupAllowFrom` 使用了用户名，必须使用数字 Telegram sender ID。
+将 OpenClaw 永久指向你的代理域名：
 
-推荐做法：
+- `OPENAI_BASE_URL=https://api.your-domain.com/v1`
+- `OPENAI_API_KEY=<cliproxy-api-key>`
 
-- 只保留一个 Telegram polling 实例（统一主网关托管）。
-- 不再单独启动 deepseek/glm 的独立 gateway。
-- 把 `allowFrom/groupAllowFrom` 改成数字 ID，或直接移除错误项。
+示例验证：
+
+```bash
+openclaw models status --json --probe --probe-provider openai-codex --probe-model gpt-5.3-codex
+```
+
+## 在其他电脑使用 API
+
+只要能访问你的域名 API，即可直接调用：
+
+```bash
+curl -sS https://api.your-domain.com/v1/models \
+  -H "Authorization: Bearer <cliproxy-api-key>"
+```
+
+> 建议只开放 `443`，并让 `cliproxyapi` 仅监听 `127.0.0.1`。
+
+## Dashboard API 清单
+
+- `GET /api/health` 健康检查
+- `GET /api/accounts` 已同步账号会话
+- `GET /api/models` 模型列表
+- `GET /api/config` 本地配置与生效配置（脱敏）
+- `GET /api/logs?lines=180` 日志尾部
+- `POST /api/actions/sync` 同步账号凭证
+- `POST /api/actions/service` 管理服务（`start|stop|restart`）
+
+`/api/actions/service` 请求示例：
+
+```bash
+curl -sS -X POST http://127.0.0.1:8328/api/actions/service \
+  -H "Content-Type: application/json" \
+  -d '{"action":"restart"}'
+```
+
+## 常见问题与修复
+
+### 1) `getUpdates conflict (409)`
+
+原因：同一个 Telegram bot token 被多个进程同时 long polling。
+
+修复：只保留一个 polling 实例（统一主网关托管），停用重复 gateway。
+
+### 2) `Missing config. Run clawdbot setup...`
+
+原因：独立 bot 网关缺少 `clawdbot.json`。
+
+修复：补配置或退回主网关统一托管。
+
+### 3) `Invalid allowFrom/groupAllowFrom`
+
+原因：使用了 Telegram 用户名而非数字 sender id。
+
+修复：改为数字 ID，或删除非法项后重载。
+
+## 安全建议
+
+- 不要提交以下文件到 Git：
+  - `auths/*.json`
+  - `config.yaml`
+  - `*.log`
+  - `.env`
+- 仅在服务端保存真实 API Key。
+- 控制台展示与配置快照应保持脱敏。
+
+## 版本信息
+
+- 当前已验证：`cliproxyapi 6.8.20`
+- 当前仓库提交：`e49507b`
+
+## 相关文档
+
+- 快速部署说明：`docs/oneclick-deploy.md`
+- 域名化部署 runbook：`docs/openclaw-codex-cliproxy-rollout.md`
+- Telegram 机器人排障 Skill：`skills/openclaw-telegram-bot-triage/SKILL.md`
