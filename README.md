@@ -17,45 +17,26 @@
 - `sync_codex_auths.sh`: 把 Codex `auth.json` 转成 CLIProxyAPI auth 文件
 - `config.example.yaml`: CLIProxyAPI 示例配置
 - `.env.example`: Dashboard 环境变量示例
+- `scripts/oneclick-local.sh`: 本地一键部署
+- `scripts/oneclick-tencent-remote.sh`: 本地发起腾讯云一键部署
+- `scripts/oneclick-tencent-server.sh`: 腾讯云服务器端安装脚本（由 remote 脚本调用）
 
-## 快速开始
+## 一键部署（本地）
 
-1. 安装依赖
-
-```bash
-npm install
-```
-
-2. 准备配置
-
-```bash
-cp config.example.yaml config.yaml
-mkdir -p auths
-chmod 700 auths
-```
-
-3. 登录两个 Codex 账号（示例）
+1. 准备两个 Codex 账号会话
 
 ```bash
 CODEX_HOME=~/.codex-acc1 codex login
 CODEX_HOME=~/.codex-acc2 codex login
 ```
 
-4. 同步账号会话到 `auths/`
+2. 一键部署并启动（会自动同步 auth、写 config、拉依赖、启动 proxy + dashboard）
 
 ```bash
-bash sync_codex_auths.sh
+bash scripts/oneclick-local.sh
 ```
 
-5. 启动 Dashboard
-
-```bash
-npm run start
-```
-
-6. 打开页面
-
-- `http://127.0.0.1:8328`
+3. 打开页面：`http://127.0.0.1:8328`
 
 ## 环境变量
 
@@ -67,6 +48,19 @@ npm run start
 - `CLIPROXY_SERVICE_NAME`
 - `SERVICE_MANAGER` (`brew` / `systemd`)
 
+本地一键脚本常用覆盖项：
+
+- `CODEX_ACC1_HOME` / `CODEX_ACC2_HOME`
+- `CLIPROXY_PORT`
+- `DASHBOARD_PORT`
+- `CLIPROXY_API_KEY`
+
+示例：
+
+```bash
+CLIPROXY_PORT=18317 DASHBOARD_PORT=18328 bash scripts/oneclick-local.sh
+```
+
 ## 安全注意事项
 
 - 不要把以下文件提交到 Git：
@@ -75,9 +69,42 @@ npm run start
   - 任意日志文件
 - 脚本和页面已做脱敏展示，但仓库中仍应只保存示例配置。
 
-## 腾讯云部署要点（摘要）
+## 一键部署（腾讯云）
 
-- `cliproxyapi` 监听 `127.0.0.1:15900`
-- Nginx 对外提供 `https://api.<your-domain>/v1`
-- DNS 增加 `api` A 记录到服务器公网 IP
-- `certbot --nginx -d api.<your-domain>` 申请证书
+在本地执行（会自动打包二进制 + auth，并远程安装 systemd + nginx）：
+
+```bash
+REMOTE_HOST=81.70.32.11 \
+REMOTE_USER=ubuntu \
+DOMAIN=api.yuchenxu.cn \
+ENABLE_TLS=1 \
+CERTBOT_EMAIL=you@example.com \
+bash scripts/oneclick-tencent-remote.sh
+```
+
+可选参数：
+
+- `SSH_KEY_PATH=~/.ssh/your-key`
+- `REMOTE_PORT=22`
+- `REMOTE_ROOT=/opt/openclaw-cliproxy-kit`
+- `CLIPROXY_PORT=15900`
+- `CLIPROXY_API_KEY=<your-key>`
+- `ENABLE_NGINX=1`
+- `RUN_USER=ubuntu`
+
+部署完成后：
+
+- 内网代理：`127.0.0.1:<CLIPROXY_PORT>`
+- 域名 API：`https://<DOMAIN>/v1`（开启 TLS 时）
+
+## 复盘问题（已修）
+
+- `Telegram getUpdates conflict (409)`：同一个 bot token 被多个进程同时 long polling。
+- `Missing config`：独立 bot 网关目录缺少 `clawdbot.json`。
+- `Invalid allowFrom entry`：`allowFrom/groupAllowFrom` 使用了用户名，必须使用数字 Telegram sender ID。
+
+推荐做法：
+
+- 只保留一个 Telegram polling 实例（统一主网关托管）。
+- 不再单独启动 deepseek/glm 的独立 gateway。
+- 把 `allowFrom/groupAllowFrom` 改成数字 ID，或直接移除错误项。
