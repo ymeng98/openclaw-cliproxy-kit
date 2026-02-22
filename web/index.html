@@ -1,0 +1,99 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>CLIProxyAPI 控制台</title>
+    <link rel="preconnect" href="https://fonts.googleapis.com" />
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+    <link
+      href="https://fonts.googleapis.com/css2?family=Archivo+Black&family=IBM+Plex+Mono:wght@400;500;700&family=Newsreader:opsz,wght@6..72,400;6..72,500&display=swap"
+      rel="stylesheet"
+    />
+    <link rel="stylesheet" href="/styles.css" />
+  </head>
+  <body>
+    <div class="bg-mesh" aria-hidden="true"></div>
+    <div class="grain" aria-hidden="true"></div>
+
+    <header class="topbar">
+      <div>
+        <p class="kicker">LOCAL OPS / CODEx POOL</p>
+        <h1>CLIProxyAPI 管理控制台</h1>
+      </div>
+      <div class="status-chip" id="service-chip">检查中...</div>
+    </header>
+
+    <main class="layout">
+      <section class="panel panel-wide">
+        <h2>运行总览</h2>
+        <div class="metrics">
+          <article class="metric-card">
+            <p class="metric-label">服务状态</p>
+            <p class="metric-value" id="metric-service">-</p>
+          </article>
+          <article class="metric-card">
+            <p class="metric-label">代理端口监听</p>
+            <p class="metric-value" id="metric-port">-</p>
+          </article>
+          <article class="metric-card">
+            <p class="metric-label">模型数量</p>
+            <p class="metric-value" id="metric-models">-</p>
+          </article>
+          <article class="metric-card">
+            <p class="metric-label">认证文件</p>
+            <p class="metric-value" id="metric-auths">-</p>
+          </article>
+        </div>
+        <p class="hint" id="health-hint">最近检查：-</p>
+      </section>
+
+      <section class="panel">
+        <h2>运维操作</h2>
+        <div class="action-grid">
+          <button id="btn-refresh" class="btn btn-main">刷新总览</button>
+          <button id="btn-sync" class="btn">同步账号凭证</button>
+          <button id="btn-restart" class="btn">重启代理服务</button>
+          <button id="btn-start" class="btn">启动服务</button>
+          <button id="btn-stop" class="btn btn-danger">停止服务</button>
+          <button id="btn-models" class="btn">刷新模型清单</button>
+          <button id="btn-logs" class="btn">刷新日志</button>
+          <button id="btn-config" class="btn">刷新配置</button>
+        </div>
+        <pre id="ops-output" class="output-box">等待操作...</pre>
+      </section>
+
+      <section class="panel">
+        <h2>账号与会话</h2>
+        <div id="accounts-grid" class="accounts-grid"></div>
+      </section>
+
+      <section class="panel">
+        <h2>模型列表</h2>
+        <div id="models-grid" class="model-grid"></div>
+      </section>
+
+      <section class="panel panel-wide">
+        <h2>配置快照</h2>
+        <div class="config-wrap">
+          <div>
+            <h3>本地配置</h3>
+            <pre id="local-config" class="code-box">加载中...</pre>
+          </div>
+          <div>
+            <h3>服务生效配置</h3>
+            <pre id="active-config" class="code-box">加载中...</pre>
+          </div>
+        </div>
+      </section>
+
+      <section class="panel panel-wide">
+        <h2>日志尾部</h2>
+        <pre id="logs-box" class="log-box">加载中...</pre>
+      </section>
+    </main>
+
+    <div id="toast" class="toast"></div>
+    <script src="/app.js" defer></script>
+  </body>
+</html>

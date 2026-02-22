@@ -1,0 +1,13 @@
+host: "127.0.0.1"
+port: 8317
+auth-dir: "./auths"
+api-keys:
+  - "replace-with-a-strong-api-key"
+routing:
+  strategy: "round-robin"
+quota-exceeded:
+  switch-project: true
+  switch-preview-model: true
+request-retry: 3
+max-retry-interval: 30
+debug: false

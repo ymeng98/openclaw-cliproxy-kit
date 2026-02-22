@@ -1,0 +1,29 @@
+node_modules/
+
+# runtime state
+auths/
+config.yaml
+cliproxyapi.log
+cliproxyapi.pid
+dashboard.log
+dashboard.pid
+dashboard.service.err.log
+dashboard.service.out.log
+
+# local artifacts
+*.bak
+*.tmp
+deploy_tmp.*/
+src_tmp.*/
+.DS_Store
+
+# binaries / large artifacts
+cliproxyapi-linux-amd64
+
+# local env
+.env
+.env.*
+
+# local launcher / generated static
+dashboard.launchd.plist
+static/
