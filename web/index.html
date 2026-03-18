@@ -60,37 +60,133 @@
           <button id="btn-logs" class="btn">刷新日志</button>
           <button id="btn-config" class="btn">刷新配置</button>
         </div>
-        <pre id="ops-output" class="output-box">等待操作...</pre>
+        <div class="hit-panel" id="hit-panel">
+          <div class="hit-head">
+            <span class="hit-title">最近命中账号</span>
+            <span class="state-pill idle" id="hit-state">等待请求</span>
+          </div>
+          <div class="hit-grid">
+            <div class="hit-item">
+              <span class="hit-label">时间</span>
+              <span class="hit-value" id="hit-time">-</span>
+            </div>
+            <div class="hit-item">
+              <span class="hit-label">Provider</span>
+              <span class="hit-value" id="hit-provider">-</span>
+            </div>
+            <div class="hit-item">
+              <span class="hit-label">Model</span>
+              <span class="hit-value" id="hit-model">-</span>
+            </div>
+            <div class="hit-item">
+              <span class="hit-label">邮箱</span>
+              <span class="hit-value" id="hit-email">-</span>
+            </div>
+          </div>
+          <div class="hit-file">
+            <span class="hit-label">Auth File</span>
+            <span class="hit-value" id="hit-auth-file">-</span>
+          </div>
+        </div>
+        <div class="history-panel">
+          <div class="hit-head">
+            <span class="hit-title">最近命中历史</span>
+            <span class="state-pill idle" id="history-state">暂无</span>
+          </div>
+          <div class="history-list" id="hit-history-list"></div>
+        </div>
+        <pre id="ops-output" class="output-box">日志加载中...</pre>
       </section>
 
       <section class="panel">
         <h2>账号与会话</h2>
+        <div class="invalid-panel">
+          <div class="hit-head">
+            <span class="hit-title">失效账号</span>
+            <div class="panel-actions">
+              <button id="btn-verify-all-accounts" class="btn btn-mini" type="button">一键验证全部账号</button>
+              <span class="state-pill idle" id="invalid-accounts-state">待诊断</span>
+            </div>
+          </div>
+          <div id="invalid-accounts-list" class="invalid-list"></div>
+        </div>
+        <div class="import-panel">
+          <label class="import-label" for="account-import-input">新增账号凭证</label>
+          <div id="account-import-target" class="import-target is-hidden">
+            <div>
+              <div class="import-target-title">当前将覆盖指定文件</div>
+              <div class="import-target-file" id="account-import-target-file">-</div>
+            </div>
+            <button id="btn-import-clear-target" class="btn btn-mini" type="button">取消指定</button>
+          </div>
+          <textarea
+            id="account-import-input"
+            class="import-input"
+            placeholder='粘贴 accessToken，或 {"accessToken":"...","refreshToken":"..."}'
+          ></textarea>
+          <div class="import-actions">
+            <div class="import-options">
+              <button id="btn-import-account" class="btn btn-main">写入账号文件</button>
+              <label class="import-check">
+                <input id="account-import-replace" type="checkbox" />
+                <span>同账号覆盖最近文件</span>
+              </label>
+            </div>
+            <p class="hint import-hint">默认追加新文件；若勾选覆盖，则命中同账号后直接更新已有文件。</p>
+          </div>
+        </div>
         <div id="accounts-grid" class="accounts-grid"></div>
       </section>
 
       <section class="panel">
         <h2>模型列表</h2>
+        <div class="model-toolbar">
+          <p class="hint" id="models-hint">点击模型可直接设为 OpenClaw 当前默认代理模型。</p>
+          <label class="import-check">
+            <input id="models-restart-openclaw" type="checkbox" />
+            <span>切换后立即重启 OpenClaw</span>
+          </label>
+        </div>
+        <div class="model-state-panel">
+          <div class="model-state-head">
+            <span class="model-state-title">模型状态</span>
+            <span class="state-pill idle" id="model-state-pill">检查中</span>
+          </div>
+          <div class="model-state-grid">
+            <div class="hit-item">
+              <span class="hit-label">配置默认</span>
+              <span class="hit-value" id="model-config-default">-</span>
+            </div>
+            <div class="hit-item">
+              <span class="hit-label">最近实际命中</span>
+              <span class="hit-value" id="model-last-hit">-</span>
+            </div>
+          </div>
+        </div>
         <div id="models-grid" class="model-grid"></div>
       </section>
 
       <section class="panel panel-wide">
-        <h2>配置快照</h2>
-        <div class="config-wrap">
-          <div>
-            <h3>本地配置</h3>
-            <pre id="local-config" class="code-box">加载中...</pre>
+        <details class="fold-panel">
+          <summary class="fold-summary">
+            <span>配置快照</span>
+            <span class="fold-hint">默认折叠</span>
+          </summary>
+          <div class="fold-body">
+            <div class="config-wrap">
+              <div>
+                <h3>本地配置</h3>
+                <pre id="local-config" class="code-box">加载中...</pre>
+              </div>
+              <div>
+                <h3>服务生效配置</h3>
+                <pre id="active-config" class="code-box">加载中...</pre>
+              </div>
+            </div>
           </div>
-          <div>
-            <h3>服务生效配置</h3>
-            <pre id="active-config" class="code-box">加载中...</pre>
-          </div>
-        </div>
+        </details>
       </section>
 
-      <section class="panel panel-wide">
-        <h2>日志尾部</h2>
-        <pre id="logs-box" class="log-box">加载中...</pre>
-      </section>
     </main>
 
     <div id="toast" class="toast"></div>
