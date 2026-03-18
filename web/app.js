@@ -2,6 +2,18 @@ const $ = (id) => document.getElementById(id);
 
 const nodes = {
   serviceChip: $("service-chip"),
+  heroServiceState: $("hero-service-state"),
+  heroServiceValue: $("hero-service-value"),
+  heroServiceDetail: $("hero-service-detail"),
+  heroServiceMeta: $("hero-service-meta"),
+  heroHitState: $("hero-hit-state"),
+  heroHitValue: $("hero-hit-value"),
+  heroHitDetail: $("hero-hit-detail"),
+  heroHitMeta: $("hero-hit-meta"),
+  heroModelState: $("hero-model-state"),
+  heroModelValue: $("hero-model-value"),
+  heroModelDetail: $("hero-model-detail"),
+  heroModelMeta: $("hero-model-meta"),
   metricService: $("metric-service"),
   metricPort: $("metric-port"),
   metricModels: $("metric-models"),
@@ -131,6 +143,20 @@ function renderHealth(health) {
   const chip = classifyServiceChip(health);
   nodes.serviceChip.textContent = chip.text;
   nodes.serviceChip.className = chip.className;
+
+  if (nodes.heroServiceState) {
+    nodes.heroServiceState.textContent = chip.text;
+    nodes.heroServiceState.className = chip.className.replace("status-chip", "state-pill");
+  }
+  if (nodes.heroServiceValue) {
+    nodes.heroServiceValue.textContent = serviceState;
+  }
+  if (nodes.heroServiceDetail) {
+    nodes.heroServiceDetail.textContent = `监听 ${listening} · 模型 ${modelCount} · 认证 ${authCount}`;
+  }
+  if (nodes.heroServiceMeta) {
+    nodes.heroServiceMeta.textContent = `最近检查：${checkedAt}`;
+  }
 }
 
 function tokenPill(label, ok) {
@@ -472,17 +498,44 @@ function renderLatestAuthHit(hit) {
     nodes.hitModel.textContent = "-";
     nodes.hitEmail.textContent = "-";
     nodes.hitAuthFile.textContent = "-";
+    if (nodes.heroHitState) {
+      nodes.heroHitState.textContent = "等待请求";
+      nodes.heroHitState.className = "state-pill idle";
+    }
+    if (nodes.heroHitValue) {
+      nodes.heroHitValue.textContent = "-";
+    }
+    if (nodes.heroHitDetail) {
+      nodes.heroHitDetail.textContent = "最近命中的账号与模型会显示在这里";
+    }
+    if (nodes.heroHitMeta) {
+      nodes.heroHitMeta.textContent = "Auth File：-";
+    }
     renderModelState();
     return;
   }
 
+  const resolvedEmail = guessEmailFromAuthFile(hit.authFile) || hit.email || "-";
   nodes.hitState.textContent = "已命中";
   nodes.hitState.className = "state-pill active";
   nodes.hitTime.textContent = hit.time || "-";
   nodes.hitProvider.textContent = hit.provider || "-";
   nodes.hitModel.textContent = hit.model || "-";
-  nodes.hitEmail.textContent = guessEmailFromAuthFile(hit.authFile) || hit.email || "-";
+  nodes.hitEmail.textContent = resolvedEmail;
   nodes.hitAuthFile.textContent = hit.authFile || "-";
+  if (nodes.heroHitState) {
+    nodes.heroHitState.textContent = "已命中";
+    nodes.heroHitState.className = "state-pill active";
+  }
+  if (nodes.heroHitValue) {
+    nodes.heroHitValue.textContent = resolvedEmail;
+  }
+  if (nodes.heroHitDetail) {
+    nodes.heroHitDetail.textContent = `${hit.model || "-"} · ${hit.provider || "-"}`;
+  }
+  if (nodes.heroHitMeta) {
+    nodes.heroHitMeta.textContent = `${hit.time || "-"} · ${hit.authFile || "-"}`;
+  }
   renderModelState();
 }
 
@@ -497,23 +550,64 @@ function renderModelState() {
   if (!selectedModelId) {
     nodes.modelStatePill.textContent = "未配置";
     nodes.modelStatePill.className = "state-pill idle";
+    if (nodes.heroModelState) {
+      nodes.heroModelState.textContent = "未配置";
+      nodes.heroModelState.className = "state-pill idle";
+    }
+    if (nodes.heroModelValue) {
+      nodes.heroModelValue.textContent = "-";
+    }
+    if (nodes.heroModelDetail) {
+      nodes.heroModelDetail.textContent = "默认模型尚未配置";
+    }
+    if (nodes.heroModelMeta) {
+      nodes.heroModelMeta.textContent = "最近实际命中：-";
+    }
     return;
+  }
+
+  if (nodes.heroModelValue) {
+    nodes.heroModelValue.textContent = selectedFullId || selectedModelId;
+  }
+  if (nodes.heroModelMeta) {
+    nodes.heroModelMeta.textContent = `最近实际命中：${latestHitModel || "-"}`;
   }
 
   if (!latestHitModel) {
     nodes.modelStatePill.textContent = "待验证";
     nodes.modelStatePill.className = "state-pill idle";
+    if (nodes.heroModelState) {
+      nodes.heroModelState.textContent = "待验证";
+      nodes.heroModelState.className = "state-pill idle";
+    }
+    if (nodes.heroModelDetail) {
+      nodes.heroModelDetail.textContent = "默认模型已写入，等待真实请求验证";
+    }
     return;
   }
 
   if (latestHitModel === selectedModelId) {
     nodes.modelStatePill.textContent = "已生效";
     nodes.modelStatePill.className = "state-pill active";
+    if (nodes.heroModelState) {
+      nodes.heroModelState.textContent = "已生效";
+      nodes.heroModelState.className = "state-pill active";
+    }
+    if (nodes.heroModelDetail) {
+      nodes.heroModelDetail.textContent = "默认模型与最近命中模型一致";
+    }
     return;
   }
 
   nodes.modelStatePill.textContent = "待生效";
   nodes.modelStatePill.className = "state-pill disabled";
+  if (nodes.heroModelState) {
+    nodes.heroModelState.textContent = "待生效";
+    nodes.heroModelState.className = "state-pill disabled";
+  }
+  if (nodes.heroModelDetail) {
+    nodes.heroModelDetail.textContent = "默认模型已切换，但最近命中仍是旧模型";
+  }
 }
 
 function guessEmailFromAuthFile(fileName) {

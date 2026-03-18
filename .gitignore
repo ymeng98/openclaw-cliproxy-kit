@@ -9,6 +9,7 @@ dashboard.log
 dashboard.pid
 dashboard.service.err.log
 dashboard.service.out.log
+compat-shim.log
 
 # local artifacts
 *.bak

@@ -24,9 +24,45 @@
       <div class="status-chip" id="service-chip">检查中...</div>
     </header>
 
+    <nav class="mobile-nav" aria-label="移动端快速导航">
+      <a href="#overview-section" class="mobile-nav-link">总览</a>
+      <a href="#ops-section" class="mobile-nav-link">运维</a>
+      <a href="#accounts-section" class="mobile-nav-link">账号</a>
+      <a href="#models-section" class="mobile-nav-link">模型</a>
+    </nav>
+
     <main class="layout">
-      <section class="panel panel-wide">
+      <section class="panel panel-wide" id="overview-section">
         <h2>运行总览</h2>
+        <div class="hero-grid">
+          <article class="hero-card hero-card-primary">
+            <div class="hero-head">
+              <span class="hero-kicker">Service Pulse</span>
+              <span class="state-pill idle" id="hero-service-state">检查中</span>
+            </div>
+            <div class="hero-value" id="hero-service-value">-</div>
+            <div class="hero-detail" id="hero-service-detail">监听状态与可用模型加载中</div>
+            <div class="hero-meta" id="hero-service-meta">最近检查：-</div>
+          </article>
+          <article class="hero-card">
+            <div class="hero-head">
+              <span class="hero-kicker">Latest Hit</span>
+              <span class="state-pill idle" id="hero-hit-state">等待请求</span>
+            </div>
+            <div class="hero-value hero-value-compact" id="hero-hit-value">-</div>
+            <div class="hero-detail" id="hero-hit-detail">最近命中的账号与模型会显示在这里</div>
+            <div class="hero-meta" id="hero-hit-meta">Auth File：-</div>
+          </article>
+          <article class="hero-card">
+            <div class="hero-head">
+              <span class="hero-kicker">Model Focus</span>
+              <span class="state-pill idle" id="hero-model-state">待验证</span>
+            </div>
+            <div class="hero-value hero-value-compact" id="hero-model-value">-</div>
+            <div class="hero-detail" id="hero-model-detail">默认模型与最近命中模型将在这里同步</div>
+            <div class="hero-meta" id="hero-model-meta">最近实际命中：-</div>
+          </article>
+        </div>
         <div class="metrics">
           <article class="metric-card">
             <p class="metric-label">服务状态</p>
@@ -48,7 +84,7 @@
         <p class="hint" id="health-hint">最近检查：-</p>
       </section>
 
-      <section class="panel">
+      <section class="panel" id="ops-section">
         <h2>运维操作</h2>
         <div class="action-grid">
           <button id="btn-refresh" class="btn btn-main">刷新总览</button>
@@ -88,17 +124,29 @@
             <span class="hit-value" id="hit-auth-file">-</span>
           </div>
         </div>
-        <div class="history-panel">
-          <div class="hit-head">
-            <span class="hit-title">最近命中历史</span>
+        <details class="subfold" open>
+          <summary class="subfold-summary">
+            <span>最近命中历史</span>
             <span class="state-pill idle" id="history-state">暂无</span>
+          </summary>
+          <div class="subfold-body">
+            <div class="history-panel">
+              <div class="history-list" id="hit-history-list"></div>
+            </div>
           </div>
-          <div class="history-list" id="hit-history-list"></div>
-        </div>
-        <pre id="ops-output" class="output-box">日志加载中...</pre>
+        </details>
+        <details class="subfold subfold-log">
+          <summary class="subfold-summary">
+            <span>异常与告警</span>
+            <span class="fold-hint">按需展开</span>
+          </summary>
+          <div class="subfold-body">
+            <pre id="ops-output" class="output-box">日志加载中...</pre>
+          </div>
+        </details>
       </section>
 
-      <section class="panel">
+      <section class="panel" id="accounts-section">
         <h2>账号与会话</h2>
         <div class="invalid-panel">
           <div class="hit-head">
@@ -110,35 +158,43 @@
           </div>
           <div id="invalid-accounts-list" class="invalid-list"></div>
         </div>
-        <div class="import-panel">
-          <label class="import-label" for="account-import-input">新增账号凭证</label>
-          <div id="account-import-target" class="import-target is-hidden">
-            <div>
-              <div class="import-target-title">当前将覆盖指定文件</div>
-              <div class="import-target-file" id="account-import-target-file">-</div>
+        <details class="subfold account-import-fold">
+          <summary class="subfold-summary">
+            <span>新增 / 替换账号凭证</span>
+            <span class="fold-hint">默认收起</span>
+          </summary>
+          <div class="subfold-body">
+            <div class="import-panel">
+              <label class="import-label" for="account-import-input">新增账号凭证</label>
+              <div id="account-import-target" class="import-target is-hidden">
+                <div>
+                  <div class="import-target-title">当前将覆盖指定文件</div>
+                  <div class="import-target-file" id="account-import-target-file">-</div>
+                </div>
+                <button id="btn-import-clear-target" class="btn btn-mini" type="button">取消指定</button>
+              </div>
+              <textarea
+                id="account-import-input"
+                class="import-input"
+                placeholder='粘贴 accessToken，或 {"accessToken":"...","refreshToken":"..."}'
+              ></textarea>
+              <div class="import-actions">
+                <div class="import-options">
+                  <button id="btn-import-account" class="btn btn-main">写入账号文件</button>
+                  <label class="import-check">
+                    <input id="account-import-replace" type="checkbox" />
+                    <span>同账号覆盖最近文件</span>
+                  </label>
+                </div>
+                <p class="hint import-hint">默认追加新文件；若勾选覆盖，则命中同账号后直接更新已有文件。</p>
+              </div>
             </div>
-            <button id="btn-import-clear-target" class="btn btn-mini" type="button">取消指定</button>
           </div>
-          <textarea
-            id="account-import-input"
-            class="import-input"
-            placeholder='粘贴 accessToken，或 {"accessToken":"...","refreshToken":"..."}'
-          ></textarea>
-          <div class="import-actions">
-            <div class="import-options">
-              <button id="btn-import-account" class="btn btn-main">写入账号文件</button>
-              <label class="import-check">
-                <input id="account-import-replace" type="checkbox" />
-                <span>同账号覆盖最近文件</span>
-              </label>
-            </div>
-            <p class="hint import-hint">默认追加新文件；若勾选覆盖，则命中同账号后直接更新已有文件。</p>
-          </div>
-        </div>
+        </details>
         <div id="accounts-grid" class="accounts-grid"></div>
       </section>
 
-      <section class="panel">
+      <section class="panel" id="models-section">
         <h2>模型列表</h2>
         <div class="model-toolbar">
           <p class="hint" id="models-hint">点击模型可直接设为 OpenClaw 当前默认代理模型。</p>
@@ -166,7 +222,7 @@
         <div id="models-grid" class="model-grid"></div>
       </section>
 
-      <section class="panel panel-wide">
+      <section class="panel panel-wide" id="config-section">
         <details class="fold-panel">
           <summary class="fold-summary">
             <span>配置快照</span>

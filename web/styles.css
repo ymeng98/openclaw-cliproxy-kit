@@ -22,6 +22,10 @@ body {
   min-height: 100%;
 }
 
+html {
+  -webkit-text-size-adjust: 100%;
+}
+
 body {
   color: var(--text);
   font-family: "Newsreader", serif;
@@ -122,6 +126,26 @@ h1 {
   grid-template-columns: repeat(2, minmax(0, 1fr));
 }
 
+#overview-section,
+#ops-section,
+#accounts-section,
+#models-section,
+#config-section {
+  scroll-margin-top: 18px;
+}
+
+.layout > * {
+  min-width: 0;
+}
+
+.mobile-nav {
+  display: none;
+}
+
+.mobile-nav-link {
+  text-decoration: none;
+}
+
 .panel {
   background: var(--panel);
   border: 1px solid var(--panel-border);
@@ -130,6 +154,7 @@ h1 {
   padding: 18px;
   backdrop-filter: blur(5px);
   animation: panel-rise 420ms ease both;
+  min-width: 0;
 }
 
 .panel-wide {
@@ -170,6 +195,47 @@ h1 {
   padding: 0 16px 16px;
 }
 
+.subfold {
+  margin-top: 12px;
+  border: 1px solid rgba(103, 180, 170, 0.14);
+  border-radius: 12px;
+  background: linear-gradient(145deg, rgba(8, 15, 18, 0.62), rgba(14, 16, 14, 0.42));
+  overflow: hidden;
+}
+
+.subfold-summary {
+  list-style: none;
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 12px;
+  font-family: "IBM Plex Mono", monospace;
+  font-size: 12px;
+  letter-spacing: 0.08em;
+  color: var(--signal);
+  text-transform: uppercase;
+}
+
+.subfold-summary::-webkit-details-marker {
+  display: none;
+}
+
+.subfold-body {
+  padding: 0 12px 12px;
+}
+
+.subfold .history-panel,
+.subfold .import-panel {
+  margin-top: 0;
+  margin-bottom: 0;
+}
+
+.subfold-log .output-box {
+  margin-top: 0;
+}
+
 @keyframes panel-rise {
   from {
     opacity: 0;
@@ -195,6 +261,75 @@ h3 {
   font-size: 12px;
   letter-spacing: 0.14em;
   text-transform: uppercase;
+}
+
+.hero-grid {
+  display: grid;
+  gap: 12px;
+  grid-template-columns: 1.35fr 1fr 1fr;
+  margin-bottom: 12px;
+}
+
+.hero-card {
+  padding: 16px;
+  border-radius: 16px;
+  border: 1px solid rgba(103, 180, 170, 0.18);
+  background: linear-gradient(150deg, rgba(11, 23, 28, 0.88), rgba(14, 15, 14, 0.56));
+  min-width: 0;
+}
+
+.hero-card-primary {
+  background: radial-gradient(circle at top left, rgba(97, 224, 200, 0.18), transparent 44%),
+    linear-gradient(150deg, rgba(8, 22, 28, 0.94), rgba(16, 18, 15, 0.62));
+  border-color: rgba(97, 224, 200, 0.26);
+}
+
+.hero-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.hero-kicker {
+  font-family: "IBM Plex Mono", monospace;
+  font-size: 11px;
+  letter-spacing: 0.14em;
+  text-transform: uppercase;
+  color: var(--signal);
+}
+
+.hero-value {
+  margin-top: 18px;
+  font-family: "Archivo Black", sans-serif;
+  font-size: clamp(28px, 4.8vw, 42px);
+  line-height: 1.04;
+  color: var(--text);
+  overflow-wrap: anywhere;
+}
+
+.hero-value-compact {
+  font-size: clamp(22px, 3.8vw, 30px);
+}
+
+.hero-detail,
+.hero-meta {
+  font-family: "IBM Plex Mono", monospace;
+  overflow-wrap: anywhere;
+}
+
+.hero-detail {
+  margin-top: 10px;
+  font-size: 12px;
+  line-height: 1.55;
+  color: #d8ece8;
+}
+
+.hero-meta {
+  margin-top: 10px;
+  font-size: 11px;
+  line-height: 1.5;
+  color: var(--subtle);
 }
 
 .metrics {
@@ -247,6 +382,9 @@ h3 {
   letter-spacing: 0.03em;
   cursor: pointer;
   transition: transform 160ms ease, filter 160ms ease, border-color 160ms ease;
+  min-width: 0;
+  white-space: normal;
+  word-break: break-word;
 }
 
 .btn:hover {
@@ -284,6 +422,7 @@ h3 {
   line-height: 1.45;
   font-family: "IBM Plex Mono", monospace;
   overflow: auto;
+  min-width: 0;
 }
 
 .hit-panel {
@@ -440,7 +579,8 @@ h3 {
   font-family: "IBM Plex Mono", monospace;
   font-size: 13px;
   color: var(--text);
-  word-break: break-all;
+  overflow-wrap: anywhere;
+  word-break: break-word;
 }
 
 .output-box {
@@ -502,7 +642,8 @@ h3 {
   margin-top: 4px;
   font-size: 14px;
   color: var(--text);
-  word-break: break-all;
+  overflow-wrap: anywhere;
+  word-break: break-word;
 }
 
 .account-group-badges {
@@ -597,7 +738,8 @@ h3 {
   font-family: "IBM Plex Mono", monospace;
   font-size: 12px;
   color: var(--text);
-  word-break: break-all;
+  overflow-wrap: anywhere;
+  word-break: break-word;
 }
 
 .is-hidden {
@@ -648,11 +790,13 @@ h3 {
   font-family: "IBM Plex Mono", monospace;
   color: var(--signal);
   font-size: 12px;
+  overflow-wrap: anywhere;
 }
 
 .account-mail {
   margin-top: 3px;
   font-size: 15px;
+  overflow-wrap: anywhere;
 }
 
 .account-meta {
@@ -796,6 +940,8 @@ h3 {
   background: rgba(8, 16, 20, 0.76);
   cursor: pointer;
   transition: transform 160ms ease, border-color 160ms ease, background 160ms ease;
+  min-width: 0;
+  overflow-wrap: anywhere;
 }
 
 .model-chip:hover {
@@ -834,6 +980,41 @@ h3 {
   transform: translateY(0);
 }
 
+.topbar > *,
+.panel > *,
+.hero-grid,
+.hero-card,
+.metrics,
+.action-grid,
+.metric-card,
+.hit-panel,
+.history-panel,
+.invalid-panel,
+.history-list,
+.history-card,
+.config-wrap,
+.accounts-grid,
+.account-group,
+.account-group-body,
+.import-panel,
+.import-actions,
+.import-options,
+.account-card,
+.account-top > *,
+.account-side,
+.account-meta,
+.account-meta > *,
+.account-runtime,
+.account-runtime > *,
+.account-actions,
+.model-grid,
+.model-toolbar,
+.model-state-panel,
+.model-state-grid,
+.model-state-grid > * {
+  min-width: 0;
+}
+
 @media (max-width: 920px) {
   .invalid-top,
   .import-target {
@@ -851,6 +1032,10 @@ h3 {
   }
   .metrics {
     grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
+  .hero-grid {
+    grid-template-columns: 1fr;
   }
   .action-grid {
     grid-template-columns: repeat(2, minmax(0, 1fr));
@@ -872,6 +1057,124 @@ h3 {
   }
 }
 
+@media (max-width: 760px) {
+  .topbar,
+  .layout {
+    width: min(1280px, calc(100vw - 20px));
+  }
+
+  body {
+    padding-bottom: 78px;
+  }
+
+  .mobile-nav {
+    position: fixed;
+    left: 50%;
+    bottom: calc(10px + env(safe-area-inset-bottom));
+    transform: translateX(-50%);
+    z-index: 15;
+    width: min(1280px, calc(100vw - 20px));
+    padding: 8px;
+    display: grid;
+    gap: 8px;
+    grid-template-columns: repeat(4, minmax(0, 1fr));
+    background: rgba(6, 12, 15, 0.86);
+    border: 1px solid rgba(103, 180, 170, 0.2);
+    border-radius: 16px;
+    box-shadow: var(--shadow);
+    backdrop-filter: blur(12px);
+  }
+
+  .mobile-nav-link {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    min-height: 38px;
+    padding: 0 8px;
+    border-radius: 12px;
+    background: rgba(14, 27, 31, 0.72);
+    color: var(--text);
+    font-family: "IBM Plex Mono", monospace;
+    font-size: 11px;
+    letter-spacing: 0.06em;
+  }
+
+  .topbar {
+    margin-top: 10px;
+    padding: 16px;
+  }
+
+  .panel {
+    padding: 14px;
+    border-radius: 16px;
+  }
+
+  h2 {
+    font-size: 18px;
+  }
+
+  .status-chip {
+    width: 100%;
+    text-align: center;
+  }
+
+  .output-box {
+    min-height: 260px;
+    max-height: 360px;
+  }
+
+  .history-top,
+  .hit-head,
+  .model-state-head,
+  .account-top,
+  .account-group-head,
+  .subfold-summary,
+  .hero-head {
+    flex-direction: column;
+    align-items: flex-start;
+  }
+
+  .account-side,
+  .account-group-badges,
+  .panel-actions {
+    align-items: flex-start;
+    justify-content: flex-start;
+  }
+
+  .account-meta,
+  .model-state-grid,
+  .hit-grid {
+    grid-template-columns: 1fr;
+  }
+
+  .output-box,
+  .code-box {
+    white-space: pre-wrap;
+    overflow-wrap: anywhere;
+    word-break: break-word;
+  }
+
+  .history-panel,
+  .invalid-panel,
+  .import-panel,
+  .model-state-panel,
+  .hit-panel {
+    padding: 10px;
+  }
+
+  .model-grid {
+    display: grid;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
+  .model-chip {
+    width: 100%;
+    min-height: 44px;
+    border-radius: 14px;
+    text-align: center;
+  }
+}
+
 @media (max-width: 620px) {
   .metrics,
   .action-grid {
@@ -879,6 +1182,70 @@ h3 {
   }
   .model-state-grid,
   .hit-grid {
+    grid-template-columns: 1fr;
+  }
+
+  .layout {
+    margin-bottom: 20px;
+    gap: 12px;
+  }
+
+  .kicker {
+    font-size: 11px;
+    letter-spacing: 0.12em;
+  }
+
+  h1 {
+    font-size: clamp(24px, 8vw, 34px);
+  }
+
+  .hero-card {
+    padding: 14px;
+    border-radius: 14px;
+  }
+
+  .hero-value {
+    margin-top: 14px;
+    font-size: clamp(24px, 8vw, 32px);
+  }
+
+  .hero-value-compact {
+    font-size: clamp(20px, 6.2vw, 26px);
+  }
+
+  .history-card,
+  .invalid-card,
+  .account-card,
+  .subfold,
+  .hit-panel,
+  .history-panel,
+  .invalid-panel,
+  .import-panel,
+  .model-state-panel {
+    padding: 10px;
+  }
+
+  .subfold {
+    padding: 0;
+  }
+
+  .subfold-body {
+    padding: 0 10px 10px;
+  }
+
+  .import-options,
+  .account-actions {
+    flex-direction: column;
+    align-items: stretch;
+  }
+
+  .account-actions .btn,
+  .import-options .btn,
+  .panel-actions .btn {
+    width: 100%;
+  }
+
+  .model-grid {
     grid-template-columns: 1fr;
   }
 }

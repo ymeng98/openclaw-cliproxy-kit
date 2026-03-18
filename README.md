@@ -22,6 +22,13 @@
 - 双账号 Codex 会话同步：`sync_codex_auths.sh`
 - CLIProxyAPI 本地代理管理
 - Dashboard 可视化运维
+- 账号导入、覆盖更新、启用/禁用、删除
+- 单账号验证与一键验证全部账号
+- 失效账号自动提取与重登入口
+- 模型列表可视化切换，并同步 OpenClaw 默认模型
+- 最近命中账号、最近命中历史、异常告警归类展示
+- 移动端优先的 WebUI：首屏摘要卡片、底部快捷导航、折叠面板
+- 可选兼容层：把旧式 `thinking`/`minimal` 请求改写为当前代理可接受的 `reasoning`
 - 配置与日志脱敏展示
 - 一键部署脚本（本地 + 腾讯云）
 - 常见故障复盘与标准修复路径
@@ -45,6 +52,7 @@ flowchart LR
 - `server.js` Dashboard 后端 API
 - `web/` Dashboard 前端
 - `sync_codex_auths.sh` 从 `CODEX_HOME/auth.json` 转换认证文件
+- `scripts/minimal-compat-shim.js` 旧参数兼容层，可把请求转发到主代理
 - `scripts/oneclick-local.sh` 本地一键部署
 - `scripts/oneclick-tencent-remote.sh` 本地发起腾讯云远程部署
 - `scripts/oneclick-tencent-server.sh` 腾讯云服务器端一键安装
@@ -87,6 +95,7 @@ bash scripts/oneclick-local.sh
 
 - Dashboard：`http://127.0.0.1:8328`
 - Proxy：`http://127.0.0.1:8317/v1`
+- Compat Shim（可选）：`http://127.0.0.1:8318/v1`
 
 ### 3) 常用覆盖参数
 
@@ -163,6 +172,12 @@ curl -sS https://api.your-domain.com/v1/models \
 - `GET /api/models` 模型列表
 - `GET /api/config` 本地配置与生效配置（脱敏）
 - `GET /api/logs?lines=180` 日志尾部
+- `POST /api/accounts/import` 导入 access token 或 JSON 凭证
+- `POST /api/accounts/:file/verify` 单文件验证
+- `POST /api/accounts/verify-all` 串行验证全部账号
+- `POST /api/accounts/:file/toggle-disabled` 启用/禁用账号文件
+- `DELETE /api/accounts/:file` 删除账号文件（幂等）
+- `POST /api/models/select` 选择默认模型，并可选重启 OpenClaw
 - `POST /api/actions/sync` 同步账号凭证
 - `POST /api/actions/service` 管理服务（`start|stop|restart`）
 
@@ -172,6 +187,82 @@ curl -sS https://api.your-domain.com/v1/models \
 curl -sS -X POST http://127.0.0.1:8328/api/actions/service \
   -H "Content-Type: application/json" \
   -d '{"action":"restart"}'
+```
+
+## 控制台当前实现的功能
+
+### 1) 运行总览与首屏摘要
+
+- 服务在线状态、监听状态、模型数量、认证文件数量
+- 首屏三张摘要卡：
+  - `Service Pulse`
+  - `Latest Hit`
+  - `Model Focus`
+- OpenClaw 当前默认模型与最近命中模型联动显示
+
+### 2) 账号与会话管理
+
+- 展示 auth 文件、邮箱、账号标识、更新时间、refresh 时间
+- 同账号文件自动分组，并支持折叠查看
+- 支持：
+  - 导入新凭证
+  - 指定目标文件覆盖
+  - 同账号覆盖最近文件
+  - 单账号验证
+  - 一键验证全部账号
+  - 启用/禁用
+  - 删除
+- 自动提取“失效账号”并给出“重新验证 / 准备重登”入口
+
+### 3) 模型管理
+
+- 读取代理池可用模型列表
+- 直接点击模型切换默认模型
+- 可选“切换后立即重启 OpenClaw”
+- 展示：
+  - 配置默认模型
+  - 最近实际命中模型
+  - 当前状态：`未配置 / 待验证 / 已生效 / 待生效`
+
+### 4) 日志与路由观察
+
+- 最近命中账号卡片
+- 最近命中历史列表
+- 异常与告警归类展示
+- 过滤掉大部分低价值 `200` 日志噪音
+- 验证探针不会污染“业务命中历史”
+
+### 5) 移动端优化
+
+- 手机首屏摘要卡片化
+- 底部快捷导航：`总览 / 运维 / 账号 / 模型`
+- 日志、历史、账号导入改为折叠面板
+- 长文件名、邮箱、日志内容自动换行
+- 已处理横向滚动与按钮挤压问题
+
+## 兼容层（可选）
+
+当上游客户端仍然发送旧式参数时，可以在主代理前面额外加一层兼容 shim：
+
+- 入口脚本：`scripts/minimal-compat-shim.js`
+- 默认监听：`127.0.0.1:8318`
+- 默认转发到：`127.0.0.1:8317`
+
+当前会做的兼容转换：
+
+- `reasoning.effort = minimal` -> `low`
+- `thinking.level / thinking.effort` -> `reasoning.effort`
+
+启动示例：
+
+```bash
+node scripts/minimal-compat-shim.js
+```
+
+自定义端口示例：
+
+```bash
+COMPAT_PORT=18318 TARGET_PORT=18317 node scripts/minimal-compat-shim.js
 ```
 
 ## 常见问题与修复
@@ -207,7 +298,7 @@ curl -sS -X POST http://127.0.0.1:8328/api/actions/service \
 ## 版本信息
 
 - 当前已验证：`cliproxyapi 6.8.20`
-- 当前仓库提交：`e49507b`
+- 控制台已覆盖桌面与移动端两套操作体验
 
 ## 相关文档
 
