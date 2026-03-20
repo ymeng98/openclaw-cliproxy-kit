@@ -247,6 +247,128 @@ async function getDashboardApiKey() {
   return matched ? matched[1].trim() : "";
 }
 
+async function getDashboardManagementKey() {
+  return getDashboardApiKey();
+}
+
+async function callCliproxyManagement(endpoint, options = {}) {
+  const managementKey = await getDashboardManagementKey();
+  if (!managementKey) {
+    throw new Error("management key not found in local config.yaml");
+  }
+
+  const url = new URL(endpoint, `${CLIPROXY_BASE_URL}/`);
+  const query = options.query || {};
+  for (const [key, value] of Object.entries(query)) {
+    const normalized = String(value ?? "").trim();
+    if (normalized) {
+      url.searchParams.set(key, normalized);
+    }
+  }
+
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), options.timeoutMs || 20000);
+
+  try {
+    const response = await fetch(url, {
+      method: options.method || "GET",
+      headers: {
+        Authorization: `Bearer ${managementKey}`,
+        ...(options.body !== undefined ? { "Content-Type": "application/json" } : {}),
+        ...(options.headers || {})
+      },
+      body: options.body !== undefined ? JSON.stringify(options.body) : undefined,
+      signal: controller.signal
+    });
+
+    const rawText = await response.text();
+    const payload = safeJsonParse(rawText);
+
+    if (!response.ok) {
+      const message =
+        payload?.error ||
+        payload?.message ||
+        `${endpoint} responded ${response.status}`;
+      throw new Error(message);
+    }
+
+    if (payload && typeof payload === "object") {
+      return payload;
+    }
+    return { ok: true, raw: rawText };
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
+async function startGeminiOAuthSession(projectId = "") {
+  return callCliproxyManagement("/v0/management/gemini-cli-auth-url", {
+    query: {
+      is_webui: "true",
+      ...(projectId ? { project_id: projectId } : {})
+    }
+  });
+}
+
+async function submitGeminiOAuthCallback({ redirectURL = "", state = "", code = "", errorText = "", projectId = "" } = {}) {
+  const normalizedRedirectURL = String(redirectURL || "").trim();
+  const normalizedState = String(state || "").trim();
+  const normalizedCode = String(code || "").trim();
+  const normalizedError = String(errorText || "").trim();
+  const normalizedProjectId = String(projectId || "").trim();
+
+  try {
+    const payload = await callCliproxyManagement("/v0/management/oauth-callback", {
+      method: "POST",
+      body: {
+        provider: "gemini",
+        redirect_url: normalizedRedirectURL,
+        state: normalizedState,
+        code: normalizedCode,
+        error: normalizedError
+      }
+    });
+    return {
+      ...payload,
+      recovered: false,
+      state: normalizedState
+    };
+  } catch (error) {
+    const message = String(error.message || error);
+    const canRecover =
+      (normalizedRedirectURL || normalizedCode) &&
+      /unknown or expired state|not pending|timed out/i.test(message);
+
+    if (!canRecover) {
+      throw error;
+    }
+
+    const freshSession = await startGeminiOAuthSession(normalizedProjectId);
+    const recoveredState = String(freshSession?.state || "").trim();
+    if (!recoveredState) {
+      throw new Error(`callback recovery failed: ${message}`);
+    }
+
+    const payload = await callCliproxyManagement("/v0/management/oauth-callback", {
+      method: "POST",
+      body: {
+        provider: "gemini",
+        redirect_url: normalizedRedirectURL,
+        state: recoveredState,
+        code: normalizedCode,
+        error: normalizedError
+      }
+    });
+    return {
+      ...payload,
+      recovered: true,
+      state: recoveredState,
+      previousState: normalizedState,
+      authURL: String(freshSession?.url || "").trim()
+    };
+  }
+}
+
 async function readJsonIfExists(filePath) {
   const text = await readTextIfExists(filePath);
   if (!text.trim()) {
@@ -1273,6 +1395,70 @@ app.post("/api/accounts/import", async (req, res) => {
       imported,
       count: accounts.length,
       accounts
+    });
+  } catch (error) {
+    res.status(500).json({
+      ok: false,
+      error: String(error.message || error)
+    });
+  }
+});
+
+app.get("/api/gemini-cli/oauth/start", async (req, res) => {
+  try {
+    const projectId = String(req.query.projectId || "").trim();
+    const payload = await startGeminiOAuthSession(projectId);
+    res.json({
+      ok: true,
+      projectId,
+      ...payload
+    });
+  } catch (error) {
+    res.status(500).json({
+      ok: false,
+      error: String(error.message || error)
+    });
+  }
+});
+
+app.get("/api/gemini-cli/oauth/status", async (req, res) => {
+  try {
+    const state = String(req.query.state || "").trim();
+    if (!state) {
+      res.status(400).json({ ok: false, error: "state is required" });
+      return;
+    }
+
+    const payload = await callCliproxyManagement("/v0/management/get-auth-status", {
+      query: { state }
+    });
+    res.json(payload);
+  } catch (error) {
+    res.status(500).json({
+      ok: false,
+      error: String(error.message || error)
+    });
+  }
+});
+
+app.post("/api/gemini-cli/oauth/callback", async (req, res) => {
+  try {
+    const redirectURL = String(req.body?.redirectURL || req.body?.redirect_url || "").trim();
+    const state = String(req.body?.state || "").trim();
+    const code = String(req.body?.code || "").trim();
+    const errorText = String(req.body?.error || "").trim();
+    const projectId = String(req.body?.projectId || req.body?.project_id || "").trim();
+
+    const payload = await submitGeminiOAuthCallback({
+      redirectURL,
+      state,
+      code,
+      errorText,
+      projectId
+    });
+    res.json({
+      ok: true,
+      ...payload
     });
   } catch (error) {
     res.status(500).json({

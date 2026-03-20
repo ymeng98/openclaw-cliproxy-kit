@@ -70,6 +70,9 @@ port: $CLIPROXY_PORT
 auth-dir: "$AUTH_DIR"
 api-keys:
   - "$api_key"
+remote-management:
+  allow-remote: false
+  secret-key: "$api_key"
 routing:
   strategy: "round-robin"
 quota-exceeded:

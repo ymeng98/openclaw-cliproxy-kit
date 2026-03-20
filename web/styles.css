@@ -707,6 +707,51 @@ h3 {
   box-shadow: 0 0 0 3px rgba(97, 224, 200, 0.12);
 }
 
+.oauth-input {
+  width: 100%;
+  min-height: 44px;
+  border-radius: 12px;
+  border: 1px solid rgba(103, 180, 170, 0.24);
+  background: rgba(4, 8, 10, 0.82);
+  color: #dceeed;
+  padding: 0 12px;
+  font-size: 12px;
+  font-family: "IBM Plex Mono", monospace;
+  outline: none;
+}
+
+.oauth-input:focus {
+  border-color: rgba(97, 224, 200, 0.55);
+  box-shadow: 0 0 0 3px rgba(97, 224, 200, 0.12);
+}
+
+.oauth-panel {
+  margin-bottom: 0;
+}
+
+.oauth-actions {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  flex-wrap: wrap;
+}
+
+.oauth-link {
+  color: #9ff7ea;
+  font-family: "IBM Plex Mono", monospace;
+  font-size: 12px;
+  overflow-wrap: anywhere;
+}
+
+.oauth-callback-input {
+  min-height: 92px;
+}
+
+.oauth-output {
+  min-height: 160px;
+  max-height: 280px;
+}
+
 .import-actions {
   display: flex;
   align-items: center;
@@ -999,6 +1044,7 @@ h3 {
 .import-panel,
 .import-actions,
 .import-options,
+.oauth-actions,
 .account-card,
 .account-top > *,
 .account-side,
@@ -1053,6 +1099,9 @@ h3 {
   }
   .import-actions {
     flex-direction: column;
+    align-items: stretch;
+  }
+  .oauth-actions {
     align-items: stretch;
   }
 }
@@ -1234,14 +1283,16 @@ h3 {
   }
 
   .import-options,
-  .account-actions {
+  .account-actions,
+  .oauth-actions {
     flex-direction: column;
     align-items: stretch;
   }
 
   .account-actions .btn,
   .import-options .btn,
-  .panel-actions .btn {
+  .panel-actions .btn,
+  .oauth-actions .btn {
     width: 100%;
   }
 

@@ -158,6 +158,48 @@
           </div>
           <div id="invalid-accounts-list" class="invalid-list"></div>
         </div>
+        <details class="subfold account-import-fold" open>
+          <summary class="subfold-summary">
+            <span>Gemini CLI 登录入口</span>
+            <span class="fold-hint">支持 Pro 会员 OAuth</span>
+          </summary>
+          <div class="subfold-body">
+            <div class="import-panel oauth-panel">
+              <label class="import-label" for="gemini-project-id">Project ID</label>
+              <input
+                id="gemini-project-id"
+                class="oauth-input"
+                type="text"
+                placeholder="留空自动发现，或填 GOOGLE_ONE / ALL / 具体 project_id"
+              />
+              <div class="oauth-actions">
+                <button id="btn-gemini-auth-start" class="btn btn-main" type="button">生成 Gemini 登录链接</button>
+                <button id="btn-gemini-auth-check" class="btn" type="button">检查登录状态</button>
+                <span class="state-pill idle" id="gemini-auth-state">未启动</span>
+              </div>
+              <a
+                id="gemini-auth-link"
+                class="oauth-link is-hidden"
+                href="#"
+                target="_blank"
+                rel="noreferrer noopener"
+              >打开 Google 登录页</a>
+              <p class="hint import-hint">
+                先点上面按钮生成链接，再在当前浏览器里手动打开。这样浏览器不会被自动弹窗打断；只有自动回跳失败时，才需要手动粘贴回调地址。
+              </p>
+              <label class="import-label" for="gemini-auth-callback">手动回调地址</label>
+              <textarea
+                id="gemini-auth-callback"
+                class="import-input oauth-callback-input"
+                placeholder="粘贴浏览器最后跳转到的完整地址，例如 http://localhost:8085/oauth2callback?code=..."
+              ></textarea>
+              <div class="oauth-actions">
+                <button id="btn-gemini-auth-submit-callback" class="btn" type="button">提交手动回调</button>
+              </div>
+              <pre id="gemini-auth-output" class="output-box oauth-output">Gemini CLI 登录未启动。</pre>
+            </div>
+          </div>
+        </details>
         <details class="subfold account-import-fold">
           <summary class="subfold-summary">
             <span>新增 / 替换账号凭证</span>

@@ -7,7 +7,9 @@
 本仓库是基于上游项目的二次优化版本，当前重点放在：
 
 - 控制台账号管理与验证能力增强
+- Gemini CLI OAuth 登录、状态轮询与手动回调补救
 - OpenClaw 默认模型联动与可视化切换
+- OpenClaw Gemini 服务商接入与 `/modes` 模型切换
 - 路由命中、异常告警、失效账号排查
 - 移动端 WebUI 适配与首屏卡片化
 - README、截图、运维说明补全
@@ -42,6 +44,8 @@
 - 单账号验证与一键验证全部账号
 - 失效账号自动提取与重登入口
 - 模型列表可视化切换，并同步 OpenClaw 默认模型
+- Gemini CLI 登录入口、授权状态轮询、超时回调自动补救
+- 可配合 OpenClaw 增加独立 Gemini 服务商，在 TG `/modes` 中切换
 - 最近命中账号、最近命中历史、异常告警归类展示
 - 移动端优先的 WebUI：首屏摘要卡片、底部快捷导航、折叠面板
 - 可选兼容层：把旧式 `thinking`/`minimal` 请求改写为当前代理可接受的 `reasoning`
@@ -170,6 +174,48 @@ bash scripts/oneclick-tencent-server.sh
 openclaw models status --json --probe --probe-provider openai-codex --probe-model gpt-5.3-codex
 ```
 
+## Gemini CLI 登录与 OpenClaw `/modes` 切换
+
+当前增强版控制台已经支持直接代理上游 `CLIProxyAPI` 的 Gemini CLI 管理接口：
+
+- 生成 Gemini CLI Google OAuth 登录链接
+- 轮询授权状态
+- 支持手动粘贴回调地址
+- 当旧 `state` 超时后，自动补救并重放 `code`
+
+要启用这组能力，`cliproxyapi` 配置里必须打开管理接口：
+
+```yaml
+remote-management:
+  allow-remote: false
+  secret-key: "<same-as-api-key-or-another-strong-key>"
+```
+
+本仓库的一键脚本和 [`config.example.yaml`](config.example.yaml) 已经包含这段配置。
+
+如果你希望在 OpenClaw 的 Telegram 对话中通过 `/modes` 正常切换 Gemini 模型，推荐在 `~/.openclaw/openclaw.json` 或 agent `models.json` 中增加一个独立的 Gemini provider，依旧走本地 `cliproxyapi` 的 `openai-responses` 兼容层，例如：
+
+```json
+{
+  "gemini-proxy": {
+    "baseUrl": "http://127.0.0.1:8317/v1",
+    "apiKey": "<cliproxy-api-key>",
+    "api": "openai-responses",
+    "models": [
+      { "id": "gemini-3-flash-preview", "name": "Gemini 3 Flash Preview", "api": "openai-responses" },
+      { "id": "gemini-3-pro-preview", "name": "Gemini 3 Pro Preview", "api": "openai-responses" },
+      { "id": "gemini-3.1-pro-preview", "name": "Gemini 3.1 Pro Preview", "api": "openai-responses" },
+      { "id": "gemini-2.5-flash", "name": "Gemini 2.5 Flash", "api": "openai-responses" },
+      { "id": "gemini-2.5-pro", "name": "Gemini 2.5 Pro", "api": "openai-responses" }
+    ]
+  }
+}
+```
+
+然后把这些模型加入 `agents.defaults.models` 白名单，`/modes` 才会把它们列出来。
+
+> 注意：有些上游预览模型虽然会出现在 `/v1beta/models` 里，但未必实际可调用。建议只把已经实测可用的模型加入 OpenClaw。
+
 ## 在其他电脑使用 API
 
 只要能访问你的域名 API，即可直接调用：
@@ -189,6 +235,9 @@ curl -sS https://api.your-domain.com/v1/models \
 - `GET /api/config` 本地配置与生效配置（脱敏）
 - `GET /api/logs?lines=180` 日志尾部
 - `POST /api/accounts/import` 导入 access token 或 JSON 凭证
+- `GET /api/gemini-cli/oauth/start` 生成 Gemini CLI 登录链接
+- `GET /api/gemini-cli/oauth/status?state=...` 查询 Gemini OAuth 状态
+- `POST /api/gemini-cli/oauth/callback` 提交回调地址或 `code/state`
 - `POST /api/accounts/:file/verify` 单文件验证
 - `POST /api/accounts/verify-all` 串行验证全部账号
 - `POST /api/accounts/:file/toggle-disabled` 启用/禁用账号文件
@@ -229,6 +278,7 @@ curl -sS -X POST http://127.0.0.1:8328/api/actions/service \
   - 启用/禁用
   - 删除
 - 自动提取“失效账号”并给出“重新验证 / 准备重登”入口
+- 内置 Gemini CLI 登录面板，支持 project id、状态轮询、手动回调与超时补救
 
 ### 3) 模型管理
 
@@ -283,6 +333,23 @@ COMPAT_PORT=18318 TARGET_PORT=18317 node scripts/minimal-compat-shim.js
 
 ## 常见问题与修复
 
+### 0) 老部署升级后 Gemini 登录入口不可用
+
+原因：旧版 `config.yaml` 没有开启 `remote-management`，导致上游 `/v0/management/*` 路由不可访问。
+
+修复：
+
+- 手动在 `config.yaml` 加入：
+
+```yaml
+remote-management:
+  allow-remote: false
+  secret-key: "<strong-key>"
+```
+
+- 重启 `cliproxyapi`
+- 如使用一键脚本重新部署，最新版脚本会自动写入这段配置
+
 ### 1) `getUpdates conflict (409)`
 
 原因：同一个 Telegram bot token 被多个进程同时 long polling。
@@ -315,6 +382,30 @@ COMPAT_PORT=18318 TARGET_PORT=18317 node scripts/minimal-compat-shim.js
 
 - 当前已验证：`cliproxyapi 6.8.20`
 - 控制台已覆盖桌面与移动端两套操作体验
+
+## 更新与升级
+
+### 更新当前仓库
+
+```bash
+cd /path/to/openclaw-cliproxy-kit
+git pull --ff-only
+npm install
+```
+
+### 本地部署更新
+
+```bash
+bash scripts/oneclick-local.sh
+```
+
+### 腾讯云部署更新
+
+```bash
+bash scripts/oneclick-tencent-remote.sh
+```
+
+如果你是从旧版本升级到带 Gemini CLI 登录能力的版本，请确认最终生效的 `config.yaml` 已包含 `remote-management` 配置；否则控制台能打开，但 Gemini 登录按钮无法工作。
 
 ## 相关文档
 

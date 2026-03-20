@@ -3,6 +3,9 @@ port: 8317
 auth-dir: "./auths"
 api-keys:
   - "replace-with-a-strong-api-key"
+remote-management:
+  allow-remote: false
+  secret-key: "replace-with-a-strong-api-key"
 routing:
   strategy: "round-robin"
 quota-exceeded:

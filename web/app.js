@@ -32,6 +32,14 @@ const nodes = {
   invalidAccountsList: $("invalid-accounts-list"),
   verifyAllAccounts: $("btn-verify-all-accounts"),
   accounts: $("accounts-grid"),
+  geminiProjectId: $("gemini-project-id"),
+  geminiAuthStart: $("btn-gemini-auth-start"),
+  geminiAuthCheck: $("btn-gemini-auth-check"),
+  geminiAuthSubmitCallback: $("btn-gemini-auth-submit-callback"),
+  geminiAuthState: $("gemini-auth-state"),
+  geminiAuthLink: $("gemini-auth-link"),
+  geminiAuthCallback: $("gemini-auth-callback"),
+  geminiAuthOutput: $("gemini-auth-output"),
   importInput: $("account-import-input"),
   importReplace: $("account-import-replace"),
   importTarget: $("account-import-target"),
@@ -70,6 +78,12 @@ const viewState = {
   accountGroupCountByKey: {},
   importTargetFile: "",
   localSuppressedAuthHitWindows: [],
+  geminiAuth: {
+    state: "",
+    url: "",
+    projectId: "",
+    pollTimerId: null
+  },
   selectedModel: {
     fullId: "",
     modelId: ""
@@ -102,6 +116,57 @@ async function api(path, options = {}) {
 
 function setOutput(text) {
   nodes.output.textContent = text || "";
+}
+
+function clearGeminiAuthPolling() {
+  if (viewState.geminiAuth.pollTimerId) {
+    clearTimeout(viewState.geminiAuth.pollTimerId);
+    viewState.geminiAuth.pollTimerId = null;
+  }
+}
+
+function setGeminiAuthState(text, tone = "idle") {
+  if (!nodes.geminiAuthState) {
+    return;
+  }
+  nodes.geminiAuthState.textContent = text;
+  nodes.geminiAuthState.className = `state-pill ${tone}`;
+}
+
+function setGeminiAuthOutput(lines) {
+  if (!nodes.geminiAuthOutput) {
+    return;
+  }
+  const text = Array.isArray(lines) ? lines.join("\n") : String(lines || "");
+  nodes.geminiAuthOutput.textContent = text;
+}
+
+function setGeminiAuthLink(url) {
+  if (!nodes.geminiAuthLink) {
+    return;
+  }
+  const normalized = String(url || "").trim();
+  if (!normalized) {
+    nodes.geminiAuthLink.href = "#";
+    nodes.geminiAuthLink.classList.add("is-hidden");
+    return;
+  }
+  nodes.geminiAuthLink.href = normalized;
+  nodes.geminiAuthLink.classList.remove("is-hidden");
+}
+
+function scheduleGeminiAuthPoll(delay = 2000) {
+  clearGeminiAuthPolling();
+  if (!viewState.geminiAuth.state) {
+    return;
+  }
+  viewState.geminiAuth.pollTimerId = window.setTimeout(async () => {
+    try {
+      await checkGeminiAuthStatus({ silent: true });
+    } catch {
+      scheduleGeminiAuthPoll(3000);
+    }
+  }, delay);
 }
 
 function showToast(message, isError = false) {
@@ -1107,6 +1172,131 @@ async function refreshLogs() {
   renderLogs(payload);
 }
 
+async function checkGeminiAuthStatus(options = {}) {
+  const state = String(viewState.geminiAuth.state || "").trim();
+  if (!state) {
+    if (!options.silent) {
+      showToast("先发起 Gemini CLI 登录", true);
+    }
+    return;
+  }
+
+  const payload = await api(`/api/gemini-cli/oauth/status?state=${encodeURIComponent(state)}`);
+  const status = String(payload?.status || "ok").trim().toLowerCase();
+
+  if (status === "wait") {
+    setGeminiAuthState("等待授权", "warnish");
+    setGeminiAuthOutput([
+      "[gemini cli oauth]",
+      `state: ${state}`,
+      `project_id: ${viewState.geminiAuth.projectId || "auto"}`,
+      "status: waiting",
+      "",
+      "浏览器完成 Google 授权后，这里会自动刷新。",
+      "如果自动回跳失败，可以把最后的回调地址粘贴到下方手动提交。"
+    ]);
+    scheduleGeminiAuthPoll();
+    return;
+  }
+
+  clearGeminiAuthPolling();
+
+  if (status === "error") {
+    setGeminiAuthState("登录失败", "bad");
+    setGeminiAuthOutput([
+      "[gemini cli oauth]",
+      `state: ${state}`,
+      `project_id: ${viewState.geminiAuth.projectId || "auto"}`,
+      "status: error",
+      `error: ${payload?.error || "unknown error"}`
+    ]);
+    showToast("Gemini CLI 登录失败", true);
+    return;
+  }
+
+  setGeminiAuthState("登录完成", "active");
+  setGeminiAuthOutput([
+    "[gemini cli oauth]",
+    `state: ${state}`,
+    `project_id: ${viewState.geminiAuth.projectId || "auto"}`,
+    "status: ok",
+    "认证已写入 auth 目录，正在刷新账号与模型。"
+  ]);
+  await Promise.allSettled([refreshAccounts(), refreshModels(), refreshHealth(), refreshLogs()]);
+  showToast("Gemini CLI 登录完成");
+}
+
+async function runGeminiAuthStart() {
+  const projectId = String(nodes.geminiProjectId?.value || "").trim();
+
+  try {
+    const suffix = projectId ? `?projectId=${encodeURIComponent(projectId)}` : "";
+    const payload = await api(`/api/gemini-cli/oauth/start${suffix}`);
+    const authURL = String(payload?.url || "").trim();
+    const state = String(payload?.state || "").trim();
+
+    if (!authURL || !state) {
+      throw new Error("登录入口没有返回 url/state");
+    }
+
+    viewState.geminiAuth.state = state;
+    viewState.geminiAuth.url = authURL;
+    viewState.geminiAuth.projectId = projectId;
+    setGeminiAuthLink(authURL);
+    setGeminiAuthState("等待授权", "warnish");
+    setGeminiAuthOutput([
+      "[gemini cli oauth]",
+      `state: ${state}`,
+      `project_id: ${projectId || "auto"}`,
+      `url: ${authURL}`,
+      "",
+      "已生成 Google 授权链接。",
+      "请点击上方“打开 Google 登录页”，并在当前浏览器完成授权。",
+      "浏览器完成授权后这里会自动轮询状态。"
+    ]);
+    showToast("Gemini CLI 登录链接已生成");
+    scheduleGeminiAuthPoll(1200);
+  } catch (error) {
+    setGeminiAuthState("启动失败", "bad");
+    setGeminiAuthOutput(String(error.message || error));
+    showToast("Gemini CLI 登录入口不可用", true);
+  }
+}
+
+async function runGeminiAuthSubmitCallback() {
+  const redirectURL = String(nodes.geminiAuthCallback?.value || "").trim();
+  if (!redirectURL) {
+    showToast("先粘贴完整回调地址", true);
+    return;
+  }
+
+  try {
+    await api("/api/gemini-cli/oauth/callback", {
+      method: "POST",
+      body: JSON.stringify({
+        redirectURL,
+        state: String(viewState.geminiAuth.state || ""),
+        projectId: String(viewState.geminiAuth.projectId || "")
+      })
+    });
+    nodes.geminiAuthCallback.value = "";
+    setGeminiAuthState("回调已提交", "warnish");
+    setGeminiAuthOutput([
+      "[gemini cli oauth]",
+      `state: ${viewState.geminiAuth.state || "-"}`,
+      `project_id: ${viewState.geminiAuth.projectId || "auto"}`,
+      "status: callback submitted",
+      "正在等待服务完成 token 交换。"
+    ]);
+    scheduleGeminiAuthPoll(1000);
+    showToast("手动回调已提交");
+  } catch (error) {
+    setGeminiAuthState("回调失败", "bad");
+    setGeminiAuthOutput(String(error.message || error));
+    showToast("手动回调提交失败", true);
+  }
+}
+
 async function refreshAll() {
   const tasks = [
     refreshHealth(),
@@ -1355,6 +1545,9 @@ function bindActions() {
   $("btn-sync").addEventListener("click", runSync);
   $("btn-import-account").addEventListener("click", runImportAccount);
   nodes.verifyAllAccounts?.addEventListener("click", runVerifyAllAccounts);
+  nodes.geminiAuthStart?.addEventListener("click", runGeminiAuthStart);
+  nodes.geminiAuthCheck?.addEventListener("click", () => checkGeminiAuthStatus({ silent: false }));
+  nodes.geminiAuthSubmitCallback?.addEventListener("click", runGeminiAuthSubmitCallback);
   nodes.importClearTarget?.addEventListener("click", () => {
     viewState.importTargetFile = "";
     renderImportTarget();
