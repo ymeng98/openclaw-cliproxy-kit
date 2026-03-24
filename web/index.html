@@ -187,6 +187,18 @@
               <p class="hint import-hint">
                 先点上面按钮生成链接，再在当前浏览器里手动打开。这样浏览器不会被自动弹窗打断；只有自动回跳失败时，才需要手动粘贴回调地址。
               </p>
+              <label class="import-label" for="gemini-token-input">手动导入 Gemini token</label>
+              <textarea
+                id="gemini-token-input"
+                class="import-input oauth-callback-input"
+                placeholder='粘贴 access_token 字符串，或 {"access_token":"ya29...","project_id":"..."}'
+              ></textarea>
+              <div class="oauth-actions">
+                <button id="btn-gemini-token-import" class="btn" type="button">保存手动 token</button>
+              </div>
+              <p class="hint import-hint">
+                如果你已经能拿到 Gemini CLI 的 access token，可以直接粘贴这里。未填写 Project ID 时，会优先沿用当前 Gemini auth 文件里的 project_id。
+              </p>
               <label class="import-label" for="gemini-auth-callback">手动回调地址</label>
               <textarea
                 id="gemini-auth-callback"
@@ -286,6 +298,19 @@
       </section>
 
     </main>
+
+    <div id="verify-all-modal" class="modal-backdrop is-hidden" aria-hidden="true">
+      <div class="modal-card" role="dialog" aria-modal="true" aria-labelledby="verify-all-modal-title">
+        <div class="modal-head">
+          <div>
+            <div class="kicker">BATCH VERIFY</div>
+            <h3 id="verify-all-modal-title">一键检测账号日志</h3>
+          </div>
+          <button id="btn-verify-all-modal-close" class="btn btn-mini" type="button">关闭</button>
+        </div>
+        <pre id="verify-all-modal-output" class="output-box modal-output">等待开始。</pre>
+      </div>
+    </div>
 
     <div id="toast" class="toast"></div>
     <script src="/app.js" defer></script>

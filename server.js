@@ -176,6 +176,42 @@ function extractAccessTokenPayload(rawInput) {
   return result;
 }
 
+function extractGeminiTokenPayload(rawInput) {
+  const trimmed = String(rawInput || "").trim();
+  if (!trimmed) {
+    throw new Error("missing gemini token payload");
+  }
+
+  const directToken = trimmed.match(/^["']?([A-Za-z0-9._-]{20,})["']?$/);
+  if (directToken) {
+    return { token: directToken[1] };
+  }
+
+  const parsed = safeJsonParse(trimmed);
+  if (parsed && typeof parsed === "object") {
+    return {
+      token: String(parsed.accessToken || parsed.access_token || parsed.token || "").trim(),
+      email: String(parsed.email || "").trim(),
+      projectId: String(parsed.projectId || parsed.project_id || "").trim()
+    };
+  }
+
+  const patterns = {
+    token: /"(?:accessToken|access_token|token)"\s*:\s*"([^"]+)"/,
+    email: /"email"\s*:\s*"([^"]+)"/,
+    projectId: /"(?:projectId|project_id)"\s*:\s*"([^"]+)"/
+  };
+
+  const result = {};
+  for (const [key, pattern] of Object.entries(patterns)) {
+    const match = trimmed.match(pattern);
+    if (match) {
+      result[key] = match[1].trim();
+    }
+  }
+  return result;
+}
+
 async function loadAuthAccountRecords() {
   let files = [];
   try {
@@ -519,7 +555,7 @@ async function fetchProxyModels() {
   }
 }
 
-async function getPreferredVerificationModel() {
+async function getPreferredVerificationModel(authType = "") {
   const [availableModels, openclawSelection] = await Promise.all([
     fetchProxyModels(),
     getOpenClawProxySelection().catch(() => ({
@@ -529,17 +565,27 @@ async function getPreferredVerificationModel() {
     }))
   ]);
 
-  const preferred = [
-    String(openclawSelection?.modelId || "").trim(),
-    "gpt-5.4",
-    "gpt-5.3-codex",
-    "gpt-5.1-codex",
-    availableModels[0] || ""
-  ].filter(Boolean);
+  const normalizedAuthType = String(authType || "").trim().toLowerCase();
+  const isGemini = normalizedAuthType === "gemini";
+  const preferred = isGemini
+    ? [
+        String(openclawSelection?.modelId || "").trim(),
+        "gemini-3-flash-preview",
+        "gemini-2.5-flash",
+        "gemini-3-pro-preview",
+        availableModels.find((item) => /^gemini-/i.test(String(item || ""))) || ""
+      ].filter(Boolean)
+    : [
+        String(openclawSelection?.modelId || "").trim(),
+        "gpt-5.4",
+        "gpt-5.3-codex",
+        "gpt-5.1-codex",
+        availableModels[0] || ""
+      ].filter(Boolean);
 
   const modelId = preferred.find((item) => availableModels.includes(item));
   if (!modelId) {
-    throw new Error("no proxy model available for account verification");
+    throw new Error(`no proxy model available for ${isGemini ? "gemini" : "codex"} account verification`);
   }
   return modelId;
 }
@@ -647,14 +693,16 @@ async function loadAuthAccounts() {
         fs.stat(absolutePath)
       ]);
       const parsed = JSON.parse(raw);
+      const isGemini = String(parsed.type || "").trim().toLowerCase() === "gemini";
+      const rawAccountId = String(parsed.account_id || parsed.project_id || "").trim();
       accounts.push({
         file: fileName,
         email: parsed.email || "",
         type: parsed.type || "",
-        accountId: compactAccountId(parsed.account_id || ""),
-        rawAccountId: parsed.account_id || "",
+        accountId: compactAccountId(rawAccountId),
+        rawAccountId,
         lastRefresh: parsed.last_refresh || "",
-        hasAccessToken: Boolean(parsed.access_token),
+        hasAccessToken: Boolean(parsed.access_token || (isGemini && parsed.token)),
         hasRefreshToken: Boolean(parsed.refresh_token),
         hasIdToken: Boolean(parsed.id_token),
         disabled: Boolean(parsed.disabled),
@@ -765,6 +813,73 @@ async function importAuthAccount(rawInput, options = {}) {
     inheritedIdToken: Boolean(!payload.idToken && sibling?.parsed?.id_token),
     matchingAccountCount: sameAccountRecords.length + (replacedExisting ? 0 : 1),
     duplicateFiles: sameAccountRecords.map((entry) => entry.fileName)
+  };
+}
+
+async function importGeminiToken(rawInput, options = {}) {
+  const payload = extractGeminiTokenPayload(rawInput);
+  const token = String(payload.token || "").trim();
+  if (!token) {
+    throw new Error("missing Gemini access token");
+  }
+
+  const requestedProjectId = String(options.projectId || payload.projectId || "").trim();
+  const requestedEmail = String(payload.email || "").trim();
+  const records = await loadAuthAccountRecords();
+  const geminiRecords = records.filter((entry) => String(entry.parsed?.type || "").trim() === "gemini");
+
+  const targetFile = String(options.targetFile || "").trim();
+  const replaceTarget =
+    targetFile
+      ? await loadAuthRecordByFile(targetFile)
+      : geminiRecords.find((entry) => requestedProjectId && entry.parsed?.project_id === requestedProjectId) ||
+        geminiRecords.find((entry) => requestedEmail && entry.parsed?.email === requestedEmail) ||
+        geminiRecords[0] ||
+        null;
+
+  let fileName;
+  let absolutePath;
+  let replacedExisting = false;
+  if (replaceTarget) {
+    fileName = replaceTarget.fileName;
+    absolutePath = replaceTarget.absolutePath;
+    replacedExisting = true;
+  } else {
+    const fileSeed = `gemini-${sanitizeFileSegment(requestedEmail || requestedProjectId || "manual-token", "manual-token")}`;
+    const target = await buildUniqueAuthFilePath(fileSeed);
+    fileName = target.fileName;
+    absolutePath = target.absolutePath;
+  }
+
+  const projectId = requestedProjectId || String(replaceTarget?.parsed?.project_id || "").trim();
+  const email = requestedEmail || String(replaceTarget?.parsed?.email || "").trim();
+
+  const document = {
+    auto: false,
+    checked: true,
+    disabled: false,
+    token,
+    type: "gemini"
+  };
+  if (email) {
+    document.email = email;
+  }
+  if (projectId) {
+    document.project_id = projectId;
+  }
+
+  await fs.writeFile(absolutePath, `${JSON.stringify(document, null, 2)}\n`, "utf8");
+  await fs.chmod(absolutePath, 0o600);
+
+  return {
+    fileName,
+    absolutePath,
+    email,
+    projectId,
+    targetedFile: targetFile || "",
+    replacedExisting,
+    inheritedProjectId: Boolean(!requestedProjectId && replaceTarget?.parsed?.project_id),
+    inheritedEmail: Boolean(!requestedEmail && replaceTarget?.parsed?.email)
   };
 }
 
@@ -1120,7 +1235,9 @@ async function verifyAuthAccountFile(fileName) {
   return withVerificationLock(async () => {
     const record = await loadAuthRecordByFile(fileName);
     const parsed = record.parsed || {};
+    const authType = String(parsed.type || "").trim().toLowerCase();
     const accessToken = String(parsed.access_token || "").trim();
+    const geminiToken = String(parsed.token || "").trim();
     const disabled = Boolean(parsed.disabled);
     const now = new Date();
     let tokenPayload = null;
@@ -1144,24 +1261,24 @@ async function verifyAuthAccountFile(fileName) {
       expiredDate.getTime() <= now.getTime();
     const recentRuntime = buildRecentRuntimeMap(await readLogTail(600))[record.fileName] || null;
 
-    if (!accessToken) {
+    if (!accessToken && !geminiToken) {
       return {
         file: record.fileName,
         email: parsed.email || "",
-        accountId: parsed.account_id || "",
+        accountId: parsed.account_id || parsed.project_id || "",
         checkedAt: now.toISOString(),
         disabled,
         expiredAt,
         locallyExpired,
         ok: false,
         status: "missing-token",
-        label: "缺少 access_token",
-        detail: "认证文件缺少 access_token，无法验证",
+        label: authType === "gemini" ? "缺少 Gemini token" : "缺少 access_token",
+        detail: authType === "gemini" ? "认证文件缺少 Gemini token，无法验证" : "认证文件缺少 access_token，无法验证",
         recentRuntime
       };
     }
 
-    const modelId = await getPreferredVerificationModel();
+    const modelId = await getPreferredVerificationModel(authType);
 
     try {
       const proxyResult = await verifyAuthThroughProxy(record.fileName, modelId);
@@ -1171,7 +1288,7 @@ async function verifyAuthAccountFile(fileName) {
       return {
         file: record.fileName,
         email: parsed.email || "",
-        accountId: parsed.account_id || "",
+        accountId: parsed.account_id || parsed.project_id || "",
         checkedAt: now.toISOString(),
         disabled,
         expiredAt,
@@ -1459,6 +1576,27 @@ app.post("/api/gemini-cli/oauth/callback", async (req, res) => {
     res.json({
       ok: true,
       ...payload
+    });
+  } catch (error) {
+    res.status(500).json({
+      ok: false,
+      error: String(error.message || error)
+    });
+  }
+});
+
+app.post("/api/gemini-cli/token", async (req, res) => {
+  try {
+    const rawInput = String(req.body?.raw || req.body?.token || req.body?.payload || "").trim();
+    const projectId = String(req.body?.projectId || req.body?.project_id || "").trim();
+    const targetFile = String(req.body?.targetFile || "").trim();
+    const imported = await importGeminiToken(rawInput, { projectId, targetFile });
+    const accounts = await loadAuthAccounts();
+    res.json({
+      ok: true,
+      imported,
+      count: accounts.length,
+      accounts
     });
   } catch (error) {
     res.status(500).json({

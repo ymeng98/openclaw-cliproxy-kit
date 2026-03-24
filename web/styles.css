@@ -446,6 +446,11 @@ h3 {
   margin-bottom: 14px;
   padding: 12px;
   border-radius: 12px;
+  border: 1px solid rgba(103, 180, 170, 0.18);
+  background: linear-gradient(145deg, rgba(8, 19, 23, 0.9), rgba(16, 15, 13, 0.62));
+}
+
+.invalid-panel.has-issues {
   border: 1px solid rgba(255, 94, 94, 0.18);
   background: linear-gradient(145deg, rgba(31, 13, 13, 0.7), rgba(17, 15, 14, 0.56));
 }
@@ -617,7 +622,6 @@ h3 {
 
 .account-group-summary {
   list-style: none;
-  cursor: pointer;
   padding: 12px;
 }
 
@@ -1023,6 +1027,51 @@ h3 {
 .toast.show {
   opacity: 1;
   transform: translateY(0);
+}
+
+.modal-backdrop {
+  position: fixed;
+  inset: 0;
+  z-index: 40;
+  display: grid;
+  place-items: center;
+  padding: 24px;
+  background: rgba(3, 8, 10, 0.72);
+  backdrop-filter: blur(10px);
+}
+
+.modal-backdrop.is-hidden {
+  display: none;
+}
+
+.modal-card {
+  width: min(920px, 100%);
+  max-height: min(82vh, 920px);
+  display: grid;
+  gap: 14px;
+  padding: 18px;
+  border-radius: 18px;
+  border: 1px solid rgba(97, 224, 200, 0.2);
+  background: linear-gradient(160deg, rgba(9, 18, 21, 0.96), rgba(17, 16, 14, 0.9));
+  box-shadow: 0 22px 90px rgba(0, 0, 0, 0.45);
+}
+
+.modal-head {
+  display: flex;
+  justify-content: space-between;
+  align-items: flex-start;
+  gap: 16px;
+}
+
+.modal-head h3 {
+  margin: 4px 0 0;
+  font-size: 24px;
+}
+
+.modal-output {
+  margin: 0;
+  min-height: 280px;
+  max-height: 60vh;
 }
 
 .topbar > *,

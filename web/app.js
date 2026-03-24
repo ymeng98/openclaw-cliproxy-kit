@@ -30,16 +30,22 @@ const nodes = {
   hitHistoryList: $("hit-history-list"),
   invalidAccountsState: $("invalid-accounts-state"),
   invalidAccountsList: $("invalid-accounts-list"),
+  invalidPanel: document.querySelector(".invalid-panel"),
   verifyAllAccounts: $("btn-verify-all-accounts"),
   accounts: $("accounts-grid"),
   geminiProjectId: $("gemini-project-id"),
   geminiAuthStart: $("btn-gemini-auth-start"),
   geminiAuthCheck: $("btn-gemini-auth-check"),
   geminiAuthSubmitCallback: $("btn-gemini-auth-submit-callback"),
+  geminiTokenInput: $("gemini-token-input"),
+  geminiTokenImport: $("btn-gemini-token-import"),
   geminiAuthState: $("gemini-auth-state"),
   geminiAuthLink: $("gemini-auth-link"),
   geminiAuthCallback: $("gemini-auth-callback"),
   geminiAuthOutput: $("gemini-auth-output"),
+  verifyAllModal: $("verify-all-modal"),
+  verifyAllModalClose: $("btn-verify-all-modal-close"),
+  verifyAllModalOutput: $("verify-all-modal-output"),
   importInput: $("account-import-input"),
   importReplace: $("account-import-replace"),
   importTarget: $("account-import-target"),
@@ -116,6 +122,30 @@ async function api(path, options = {}) {
 
 function setOutput(text) {
   nodes.output.textContent = text || "";
+}
+
+function setVerifyAllModalOutput(text) {
+  if (!nodes.verifyAllModalOutput) {
+    return;
+  }
+  nodes.verifyAllModalOutput.textContent = text || "";
+}
+
+function openVerifyAllModal(text = "") {
+  if (!nodes.verifyAllModal) {
+    return;
+  }
+  setVerifyAllModalOutput(text);
+  nodes.verifyAllModal.classList.remove("is-hidden");
+  nodes.verifyAllModal.setAttribute("aria-hidden", "false");
+}
+
+function closeVerifyAllModal() {
+  if (!nodes.verifyAllModal) {
+    return;
+  }
+  nodes.verifyAllModal.classList.add("is-hidden");
+  nodes.verifyAllModal.setAttribute("aria-hidden", "true");
 }
 
 function clearGeminiAuthPolling() {
@@ -432,11 +462,11 @@ function renderAccounts(payload) {
         .sort()
         .reverse()[0];
       const latestHitFile = String(viewState.latestAuthHit?.authFile || "");
-      const shouldOpen = group.some((item) => item.file === latestHitFile);
+      const isLatestHitGroup = group.some((item) => item.file === latestHitFile);
 
       return `
-        <details class="account-group" ${shouldOpen ? "open" : ""}>
-          <summary class="account-group-summary">
+        <section class="account-group">
+          <div class="account-group-summary">
             <div class="account-group-head">
               <div>
                 <div class="account-group-title">同账号组 ${group.length}</div>
@@ -450,13 +480,13 @@ function renderAccounts(payload) {
             <div class="account-group-meta">
               <span>文件数: ${group.length}</span>
               <span>最近更新: ${latestUpdated ? new Date(latestUpdated).toLocaleString() : "-"}</span>
-              <span>${shouldOpen ? "当前命中组" : "点击展开"}</span>
+              <span>${isLatestHitGroup ? "当前命中组" : "并列展示"}</span>
             </div>
-          </summary>
+          </div>
           <div class="account-group-body">
             ${group.map((item) => renderAccountCard(item)).join("")}
           </div>
-        </details>
+        </section>
       `;
     })
     .join("");
@@ -476,12 +506,14 @@ function renderInvalidAccounts() {
     .filter((entry) => entry.issue);
 
   if (!invalidAccounts.length) {
+    nodes.invalidPanel?.classList.remove("has-issues");
     nodes.invalidAccountsState.textContent = "正常";
     nodes.invalidAccountsState.className = "state-pill active";
     nodes.invalidAccountsList.innerHTML = `<div class="history-empty">最近没有已判定失效的账号文件</div>`;
     return;
   }
 
+  nodes.invalidPanel?.classList.add("has-issues");
   nodes.invalidAccountsState.textContent = `${invalidAccounts.length} 个`;
   nodes.invalidAccountsState.className = "state-pill bad";
   nodes.invalidAccountsList.innerHTML = invalidAccounts
@@ -1297,6 +1329,44 @@ async function runGeminiAuthSubmitCallback() {
   }
 }
 
+async function runGeminiTokenImport() {
+  const rawInput = String(nodes.geminiTokenInput?.value || "").trim();
+  if (!rawInput) {
+    showToast("先粘贴 Gemini token 或 JSON", true);
+    return;
+  }
+
+  try {
+    const projectId = String(nodes.geminiProjectId?.value || "").trim();
+    const payload = await api("/api/gemini-cli/token", {
+      method: "POST",
+      body: JSON.stringify({
+        raw: rawInput,
+        projectId
+      })
+    });
+
+    if (nodes.geminiTokenInput) {
+      nodes.geminiTokenInput.value = "";
+    }
+    setGeminiAuthState("手动导入完成", "good");
+    setGeminiAuthOutput([
+      "[gemini cli token]",
+      `file: ${payload?.imported?.fileName || "-"}`,
+      `project_id: ${payload?.imported?.projectId || projectId || "auto"}`,
+      `email: ${payload?.imported?.email || "-"}`,
+      `replaced: ${payload?.imported?.replacedExisting ? "yes" : "no"}`,
+      "token 已写入 auth 目录，正在刷新账号与模型。"
+    ]);
+    await Promise.allSettled([refreshAccounts(), refreshModels(), refreshHealth(), refreshLogs()]);
+    showToast("Gemini token 已保存");
+  } catch (error) {
+    setGeminiAuthState("手动导入失败", "bad");
+    setGeminiAuthOutput(String(error.message || error));
+    showToast("Gemini token 导入失败", true);
+  }
+}
+
 async function refreshAll() {
   const tasks = [
     refreshHealth(),
@@ -1466,6 +1536,14 @@ async function runVerifyAccount(file) {
 
 async function runVerifyAllAccounts() {
   try {
+    openVerifyAllModal(
+      [
+        "[account verify all]",
+        `started: ${new Date().toLocaleString()}`,
+        "status: running",
+        "正在逐个验证账号，请稍候..."
+      ].join("\n")
+    );
     rememberLocalSuppressedAuthHits((viewState.accounts || []).map((item) => item.file));
     const payload = await api("/api/accounts/verify-all", {
       method: "POST"
@@ -1477,19 +1555,30 @@ async function runVerifyAllAccounts() {
       }
     }
     renderAccounts({ accounts: viewState.accounts });
-    setOutput(
-      [
-        "[account verify all]",
-        ...verifications.map((item) => `${item.file} | ${item.status || "-"} | ${item.label || "-"} | ${item.detail || "-"}`)
-      ].join("\n")
-    );
+    const report = [
+      "[account verify all]",
+      `finished: ${new Date().toLocaleString()}`,
+      `total: ${verifications.length}`,
+      ...verifications.map((item) => `${item.file} | ${item.status || "-"} | ${item.label || "-"} | ${item.detail || "-"}`)
+    ].join("\n");
+    setOutput(report);
+    setVerifyAllModalOutput(report);
     const failedCount = verifications.filter((item) => !item.ok).length;
     showToast(
       failedCount ? `已验证 ${verifications.length} 个账号，异常 ${failedCount} 个` : `已验证 ${verifications.length} 个账号`,
       failedCount > 0
     );
   } catch (error) {
-    setOutput(String(error.message || error));
+    const message = String(error.message || error);
+    setOutput(message);
+    openVerifyAllModal(
+      [
+        "[account verify all]",
+        `finished: ${new Date().toLocaleString()}`,
+        "status: failed",
+        message
+      ].join("\n")
+    );
     showToast("批量验证失败", true);
   }
 }
@@ -1545,9 +1634,16 @@ function bindActions() {
   $("btn-sync").addEventListener("click", runSync);
   $("btn-import-account").addEventListener("click", runImportAccount);
   nodes.verifyAllAccounts?.addEventListener("click", runVerifyAllAccounts);
+  nodes.verifyAllModalClose?.addEventListener("click", closeVerifyAllModal);
+  nodes.verifyAllModal?.addEventListener("click", (event) => {
+    if (event.target === nodes.verifyAllModal) {
+      closeVerifyAllModal();
+    }
+  });
   nodes.geminiAuthStart?.addEventListener("click", runGeminiAuthStart);
   nodes.geminiAuthCheck?.addEventListener("click", () => checkGeminiAuthStatus({ silent: false }));
   nodes.geminiAuthSubmitCallback?.addEventListener("click", runGeminiAuthSubmitCallback);
+  nodes.geminiTokenImport?.addEventListener("click", runGeminiTokenImport);
   nodes.importClearTarget?.addEventListener("click", () => {
     viewState.importTargetFile = "";
     renderImportTarget();
@@ -1610,3 +1706,8 @@ renderImportTarget();
 refreshAll();
 scheduleHeartbeat();
 document.addEventListener("visibilitychange", () => scheduleHeartbeat(1000));
+document.addEventListener("keydown", (event) => {
+  if (event.key === "Escape") {
+    closeVerifyAllModal();
+  }
+});
