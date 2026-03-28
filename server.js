@@ -1,8 +1,18 @@
 const express = require("express");
 const fs = require("fs/promises");
+const fsSync = require("fs");
 const path = require("path");
 const util = require("util");
 const { execFile } = require("child_process");
+const { requestContextMiddleware, sendError, asyncRoute } = require("./src/lib/response");
+const { createApiError, ERROR_CODES } = require("./src/lib/errors");
+const { schemas, validateBody, validateParams, validateQuery } = require("./src/lib/validators");
+const { createTaskStore } = require("./src/state/task-store");
+const { createTaskService } = require("./src/services/task.service");
+const { createUsageAllRunner } = require("./src/services/usage.service");
+const { createVerifyAllRunner } = require("./src/services/verification.service");
+const { createLogAnalyzer } = require("./src/services/log-analyzer.service");
+const { registerTaskRoutes } = require("./src/routes/tasks.routes");
 
 const execFileAsync = util.promisify(execFile);
 
@@ -11,7 +21,10 @@ const AUTH_DIR = process.env.AUTH_DIR || path.join(ROOT_DIR, "auths");
 const LOCAL_CONFIG_PATH = process.env.LOCAL_CONFIG_PATH || path.join(ROOT_DIR, "config.yaml");
 const ACTIVE_CONFIG_PATH =
   process.env.ACTIVE_CONFIG_PATH || "/Users/liuxiaoyu/cliproxy-kit/config.yaml";
-const LOCAL_LOG_PATH = process.env.LOCAL_LOG_PATH || path.join(ROOT_DIR, "cliproxyapi.log");
+const DEFAULT_SERVICE_LOG_PATH = path.join(process.env.HOME || "", "Services", "logs", "cliproxy", "cliproxyapi.log");
+const LOCAL_LOG_PATH =
+  process.env.LOCAL_LOG_PATH ||
+  (fsSync.existsSync(DEFAULT_SERVICE_LOG_PATH) ? DEFAULT_SERVICE_LOG_PATH : path.join(ROOT_DIR, "cliproxyapi.log"));
 const SYNC_SCRIPT_PATH = process.env.SYNC_SCRIPT_PATH || path.join(ROOT_DIR, "sync_codex_auths.sh");
 const CLIPROXY_BASE_URL = process.env.CLIPROXY_BASE_URL || "http://127.0.0.1:8317";
 const CLIPROXY_SERVICE_NAME = process.env.CLIPROXY_SERVICE_NAME || "cliproxyapi";
@@ -21,6 +34,28 @@ const OPENCLAW_CONFIG_PATH =
   process.env.OPENCLAW_CONFIG_PATH || "/Users/liuxiaoyu/.openclaw/openclaw.json";
 const OPENCLAW_GATEWAY_LABEL = process.env.OPENCLAW_GATEWAY_LABEL || "ai.openclaw.gateway";
 const OPENCLAW_NODE_LABEL = process.env.OPENCLAW_NODE_LABEL || "ai.openclaw.node";
+const DATA_DIR = process.env.DATA_DIR || path.join(ROOT_DIR, "data");
+const ACCOUNT_USAGE_CACHE_PATH =
+  process.env.ACCOUNT_USAGE_CACHE_PATH || path.join(DATA_DIR, "account-usage-cache.json");
+const USAGE_CACHE_TTL_MS = Math.max(
+  60 * 1000,
+  Number(process.env.USAGE_CACHE_TTL_MS || 6 * 60 * 60 * 1000)
+);
+
+function envFlag(name, defaultValue = true) {
+  const raw = process.env[name];
+  if (typeof raw === "undefined" || raw === null || raw === "") {
+    return Boolean(defaultValue);
+  }
+  const normalized = String(raw).trim().toLowerCase();
+  if (["1", "true", "yes", "on"].includes(normalized)) {
+    return true;
+  }
+  if (["0", "false", "no", "off"].includes(normalized)) {
+    return false;
+  }
+  return Boolean(defaultValue);
+}
 
 function resolveProxyPort() {
   const fromEnv = Number(process.env.CLIPROXY_PORT || "");
@@ -40,9 +75,19 @@ function resolveProxyPort() {
 }
 
 const CLIPROXY_PORT = resolveProxyPort();
+const CODEX_OAUTH_CLIENT_ID = process.env.CODEX_OAUTH_CLIENT_ID || "app_EMoamEEZ73f0CkXaXp7hrann";
+const CODEX_TOKEN_ENDPOINT = process.env.CODEX_TOKEN_ENDPOINT || "https://auth.openai.com/oauth/token";
+const CODEX_USAGE_ENDPOINT = process.env.CODEX_USAGE_ENDPOINT || "https://chatgpt.com/backend-api/wham/usage";
+const TASK_MODE_ENABLED = envFlag("TASK_MODE_ENABLED", true);
+const RESPONSE_V2_ENABLED = envFlag("RESPONSE_V2_ENABLED", true);
+const LOG_INCREMENTAL_ENABLED = envFlag("LOG_INCREMENTAL_ENABLED", true);
+const SCHEMA_VALIDATION_ENABLED = envFlag("SCHEMA_VALIDATION_ENABLED", true);
+const TASK_CONCURRENCY = Math.max(1, Math.min(Number(process.env.TASK_CONCURRENCY || 1), 2));
+const LOG_CACHE_LINES = Math.max(100, Math.min(Number(process.env.LOG_CACHE_LINES || 500), 2000));
 
 const app = express();
 app.use(express.json({ limit: "200kb" }));
+app.use(requestContextMiddleware());
 app.use(express.static(path.join(ROOT_DIR, "web")));
 
 const verificationWindows = [];
@@ -134,6 +179,228 @@ function decodeJwtPayload(token) {
   return JSON.parse(json);
 }
 
+function extractCodexAccountIdFromAccessToken(accessToken) {
+  try {
+    const payload = decodeJwtPayload(accessToken);
+    const authData = payload?.["https://api.openai.com/auth"];
+    const accountId = String(authData?.chatgpt_account_id || "").trim();
+    return accountId || "";
+  } catch {
+    return "";
+  }
+}
+
+function isJwtLikelyExpired(accessToken) {
+  try {
+    const payload = decodeJwtPayload(accessToken);
+    const exp = Number(payload?.exp || 0);
+    if (!Number.isFinite(exp) || exp <= 0) {
+      return true;
+    }
+    return exp < Math.floor(Date.now() / 1000) + 60;
+  } catch {
+    return true;
+  }
+}
+
+function parseFiniteNumber(value) {
+  const n = Number(value);
+  return Number.isFinite(n) ? n : null;
+}
+
+function clampPercent(value) {
+  const n = parseFiniteNumber(value);
+  if (n === null) {
+    return null;
+  }
+  return Math.max(0, Math.min(100, Math.round(n)));
+}
+
+function normalizeWindowMinutes(windowSeconds) {
+  const seconds = parseFiniteNumber(windowSeconds);
+  if (seconds === null || seconds <= 0) {
+    return null;
+  }
+  return Math.ceil(seconds / 60);
+}
+
+function normalizeResetEpoch(window) {
+  const resetAt = parseFiniteNumber(window?.reset_at);
+  if (resetAt !== null && resetAt > 0) {
+    return Math.floor(resetAt);
+  }
+  const resetAfterSeconds = parseFiniteNumber(window?.reset_after_seconds);
+  if (resetAfterSeconds === null || resetAfterSeconds < 0) {
+    return null;
+  }
+  return Math.floor(Date.now() / 1000 + resetAfterSeconds);
+}
+
+function normalizeUsageWindow(window) {
+  if (!window || typeof window !== "object") {
+    return null;
+  }
+
+  const usedPercent = clampPercent(window.used_percent);
+  const remainingPercent = usedPercent === null ? null : Math.max(0, 100 - usedPercent);
+  const resetAt = normalizeResetEpoch(window);
+
+  return {
+    usedPercent,
+    remainingPercent,
+    windowMinutes: normalizeWindowMinutes(window.limit_window_seconds),
+    resetAt,
+    resetAtIso: resetAt ? new Date(resetAt * 1000).toISOString() : ""
+  };
+}
+
+function summarizeCodexUsage(usage) {
+  const primary = usage?.primaryWindow;
+  const secondary = usage?.secondaryWindow;
+  const parts = [];
+
+  if (primary) {
+    parts.push(
+      `主窗口剩余 ${primary.remainingPercent ?? "-"}% / 已用 ${primary.usedPercent ?? "-"}% / 重置 ${primary.resetAtIso || "-"}`
+    );
+  } else {
+    parts.push("主窗口: -");
+  }
+
+  if (secondary) {
+    parts.push(
+      `周窗口剩余 ${secondary.remainingPercent ?? "-"}% / 已用 ${secondary.usedPercent ?? "-"}% / 重置 ${secondary.resetAtIso || "-"}`
+    );
+  } else {
+    parts.push("周窗口: -");
+  }
+
+  return parts.join(" | ");
+}
+
+function shouldForceCodexTokenRefresh(httpStatus, detail) {
+  const normalized = String(detail || "").toLowerCase();
+  return (
+    Number(httpStatus) === 401 ||
+    normalized.includes("token_invalidated") ||
+    normalized.includes("your authentication token has been invalidated") ||
+    normalized.includes("401 unauthorized")
+  );
+}
+
+async function refreshCodexTokens(refreshToken) {
+  const normalized = String(refreshToken || "").trim();
+  if (!normalized) {
+    throw new Error("missing refresh_token");
+  }
+
+  const body = new URLSearchParams({
+    grant_type: "refresh_token",
+    refresh_token: normalized,
+    client_id: CODEX_OAUTH_CLIENT_ID
+  });
+
+  const response = await fetch(CODEX_TOKEN_ENDPOINT, {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/x-www-form-urlencoded"
+    },
+    body: body.toString()
+  });
+
+  const rawText = await response.text();
+  const payload = safeJsonParse(rawText);
+
+  if (!response.ok) {
+    const message = payload?.error_description || payload?.error || `token refresh failed: ${response.status}`;
+    const error = new Error(String(message));
+    error.httpStatus = response.status;
+    throw error;
+  }
+
+  const accessToken = String(payload?.access_token || "").trim();
+  const idToken = String(payload?.id_token || "").trim();
+  const nextRefreshToken = String(payload?.refresh_token || normalized).trim();
+  if (!accessToken || !idToken) {
+    throw new Error("token refresh payload missing access_token or id_token");
+  }
+
+  return {
+    accessToken,
+    idToken,
+    refreshToken: nextRefreshToken
+  };
+}
+
+async function fetchCodexUsageOnce(accessToken, accountId = "") {
+  const normalizedToken = String(accessToken || "").trim();
+  if (!normalizedToken) {
+    throw new Error("missing access_token");
+  }
+
+  const headers = {
+    Authorization: `Bearer ${normalizedToken}`,
+    Accept: "application/json"
+  };
+  const normalizedAccountId = String(accountId || "").trim();
+  if (normalizedAccountId) {
+    headers["ChatGPT-Account-Id"] = normalizedAccountId;
+  }
+
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), 20000);
+  try {
+    const response = await fetch(CODEX_USAGE_ENDPOINT, {
+      method: "GET",
+      headers,
+      signal: controller.signal
+    });
+    const rawText = await response.text();
+    const payload = safeJsonParse(rawText);
+
+    if (!response.ok) {
+      const detailCode =
+        payload?.detail?.code ||
+        payload?.error?.code ||
+        payload?.code ||
+        "";
+      const detailMessage =
+        payload?.detail?.message ||
+        payload?.error?.message ||
+        payload?.message ||
+        rawText.slice(0, 260);
+      const message = String(detailCode ? `${detailMessage} [error_code:${detailCode}]` : detailMessage).trim();
+      const error = new Error(message || `usage endpoint responded ${response.status}`);
+      error.httpStatus = response.status;
+      error.detail = message;
+      throw error;
+    }
+
+    if (!payload || typeof payload !== "object") {
+      throw new Error("usage endpoint did not return valid JSON");
+    }
+
+    return payload;
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
+function normalizeCodexUsagePayload(payload) {
+  const rateLimit = payload?.rate_limit || {};
+  const primaryWindow = normalizeUsageWindow(rateLimit?.primary_window);
+  const secondaryWindow = normalizeUsageWindow(rateLimit?.secondary_window);
+  return {
+    planType: String(payload?.plan_type || "").trim(),
+    primaryWindow,
+    secondaryWindow,
+    fiveHourRemainingPercent: primaryWindow?.remainingPercent ?? null,
+    weeklyRemainingPercent: secondaryWindow?.remainingPercent ?? null,
+    fiveHourUsedPercent: primaryWindow?.usedPercent ?? null,
+    weeklyUsedPercent: secondaryWindow?.usedPercent ?? null
+  };
+}
+
 function extractAccessTokenPayload(rawInput) {
   const trimmed = String(rawInput || "").trim();
   if (!trimmed) {
@@ -164,42 +431,6 @@ function extractAccessTokenPayload(rawInput) {
     email: /"email"\s*:\s*"([^"]+)"/,
     accountId: /"(?:accountId|account_id)"\s*:\s*"([^"]+)"/,
     expired: /"expired"\s*:\s*"([^"]+)"/
-  };
-
-  const result = {};
-  for (const [key, pattern] of Object.entries(patterns)) {
-    const match = trimmed.match(pattern);
-    if (match) {
-      result[key] = match[1].trim();
-    }
-  }
-  return result;
-}
-
-function extractGeminiTokenPayload(rawInput) {
-  const trimmed = String(rawInput || "").trim();
-  if (!trimmed) {
-    throw new Error("missing gemini token payload");
-  }
-
-  const directToken = trimmed.match(/^["']?([A-Za-z0-9._-]{20,})["']?$/);
-  if (directToken) {
-    return { token: directToken[1] };
-  }
-
-  const parsed = safeJsonParse(trimmed);
-  if (parsed && typeof parsed === "object") {
-    return {
-      token: String(parsed.accessToken || parsed.access_token || parsed.token || "").trim(),
-      email: String(parsed.email || "").trim(),
-      projectId: String(parsed.projectId || parsed.project_id || "").trim()
-    };
-  }
-
-  const patterns = {
-    token: /"(?:accessToken|access_token|token)"\s*:\s*"([^"]+)"/,
-    email: /"email"\s*:\s*"([^"]+)"/,
-    projectId: /"(?:projectId|project_id)"\s*:\s*"([^"]+)"/
   };
 
   const result = {};
@@ -283,134 +514,125 @@ async function getDashboardApiKey() {
   return matched ? matched[1].trim() : "";
 }
 
-async function getDashboardManagementKey() {
-  return getDashboardApiKey();
-}
-
-async function callCliproxyManagement(endpoint, options = {}) {
-  const managementKey = await getDashboardManagementKey();
-  if (!managementKey) {
-    throw new Error("management key not found in local config.yaml");
-  }
-
-  const url = new URL(endpoint, `${CLIPROXY_BASE_URL}/`);
-  const query = options.query || {};
-  for (const [key, value] of Object.entries(query)) {
-    const normalized = String(value ?? "").trim();
-    if (normalized) {
-      url.searchParams.set(key, normalized);
-    }
-  }
-
-  const controller = new AbortController();
-  const timer = setTimeout(() => controller.abort(), options.timeoutMs || 20000);
-
-  try {
-    const response = await fetch(url, {
-      method: options.method || "GET",
-      headers: {
-        Authorization: `Bearer ${managementKey}`,
-        ...(options.body !== undefined ? { "Content-Type": "application/json" } : {}),
-        ...(options.headers || {})
-      },
-      body: options.body !== undefined ? JSON.stringify(options.body) : undefined,
-      signal: controller.signal
-    });
-
-    const rawText = await response.text();
-    const payload = safeJsonParse(rawText);
-
-    if (!response.ok) {
-      const message =
-        payload?.error ||
-        payload?.message ||
-        `${endpoint} responded ${response.status}`;
-      throw new Error(message);
-    }
-
-    if (payload && typeof payload === "object") {
-      return payload;
-    }
-    return { ok: true, raw: rawText };
-  } finally {
-    clearTimeout(timer);
-  }
-}
-
-async function startGeminiOAuthSession(projectId = "") {
-  return callCliproxyManagement("/v0/management/gemini-cli-auth-url", {
-    query: {
-      is_webui: "true",
-      ...(projectId ? { project_id: projectId } : {})
-    }
-  });
-}
-
-async function submitGeminiOAuthCallback({ redirectURL = "", state = "", code = "", errorText = "", projectId = "" } = {}) {
-  const normalizedRedirectURL = String(redirectURL || "").trim();
-  const normalizedState = String(state || "").trim();
-  const normalizedCode = String(code || "").trim();
-  const normalizedError = String(errorText || "").trim();
-  const normalizedProjectId = String(projectId || "").trim();
-
-  try {
-    const payload = await callCliproxyManagement("/v0/management/oauth-callback", {
-      method: "POST",
-      body: {
-        provider: "gemini",
-        redirect_url: normalizedRedirectURL,
-        state: normalizedState,
-        code: normalizedCode,
-        error: normalizedError
-      }
-    });
-    return {
-      ...payload,
-      recovered: false,
-      state: normalizedState
-    };
-  } catch (error) {
-    const message = String(error.message || error);
-    const canRecover =
-      (normalizedRedirectURL || normalizedCode) &&
-      /unknown or expired state|not pending|timed out/i.test(message);
-
-    if (!canRecover) {
-      throw error;
-    }
-
-    const freshSession = await startGeminiOAuthSession(normalizedProjectId);
-    const recoveredState = String(freshSession?.state || "").trim();
-    if (!recoveredState) {
-      throw new Error(`callback recovery failed: ${message}`);
-    }
-
-    const payload = await callCliproxyManagement("/v0/management/oauth-callback", {
-      method: "POST",
-      body: {
-        provider: "gemini",
-        redirect_url: normalizedRedirectURL,
-        state: recoveredState,
-        code: normalizedCode,
-        error: normalizedError
-      }
-    });
-    return {
-      ...payload,
-      recovered: true,
-      state: recoveredState,
-      previousState: normalizedState,
-      authURL: String(freshSession?.url || "").trim()
-    };
-  }
-}
-
 async function readJsonIfExists(filePath) {
   const text = await readTextIfExists(filePath);
   if (!text.trim()) {
     return null;
   }
   return JSON.parse(text);
+}
+
+function createEmptyUsageCache() {
+  return {
+    version: 1,
+    updatedAt: "",
+    entries: {}
+  };
+}
+
+function normalizeUsageCache(raw) {
+  if (!raw || typeof raw !== "object") {
+    return createEmptyUsageCache();
+  }
+  return {
+    version: 1,
+    updatedAt: String(raw.updatedAt || ""),
+    entries: raw.entries && typeof raw.entries === "object" ? raw.entries : {}
+  };
+}
+
+async function readUsageCache() {
+  try {
+    const raw = await fs.readFile(ACCOUNT_USAGE_CACHE_PATH, "utf8");
+    const parsed = safeJsonParse(raw);
+    return normalizeUsageCache(parsed);
+  } catch (error) {
+    if (error && error.code === "ENOENT") {
+      return createEmptyUsageCache();
+    }
+    return createEmptyUsageCache();
+  }
+}
+
+async function writeUsageCache(cache) {
+  await fs.mkdir(DATA_DIR, { recursive: true });
+  await fs.writeFile(ACCOUNT_USAGE_CACHE_PATH, `${JSON.stringify(cache, null, 2)}\n`, "utf8");
+}
+
+function buildUsageCacheEntry(result) {
+  const usage = result?.usage || null;
+  const primary = usage?.primaryWindow || null;
+  const secondary = usage?.secondaryWindow || null;
+  return {
+    file: String(result?.file || ""),
+    checkedAt: String(result?.checkedAt || new Date().toISOString()),
+    ok: Boolean(result?.ok),
+    status: String(result?.status || ""),
+    label: String(result?.label || ""),
+    detail: String(result?.detail || ""),
+    refreshedToken: Boolean(result?.refreshedToken),
+    refreshReason: String(result?.refreshReason || ""),
+    usage: usage
+      ? {
+          ...usage,
+          fiveHourRemainingPercent: primary?.remainingPercent ?? null,
+          weeklyRemainingPercent: secondary?.remainingPercent ?? null,
+          fiveHourUsedPercent: primary?.usedPercent ?? null,
+          weeklyUsedPercent: secondary?.usedPercent ?? null
+        }
+      : null
+  };
+}
+
+async function persistUsageResult(fileName, result) {
+  const safeFileName = String(fileName || "").trim();
+  if (!safeFileName) {
+    return result;
+  }
+
+  const cache = await readUsageCache();
+  cache.entries[safeFileName] = buildUsageCacheEntry(result);
+  cache.updatedAt = new Date().toISOString();
+  await writeUsageCache(cache);
+  return result;
+}
+
+function toBackfilledUsage(entry, nowMs = Date.now()) {
+  if (!entry || typeof entry !== "object") {
+    return null;
+  }
+  const checkedAt = String(entry.checkedAt || "");
+  const checkedAtMs = Date.parse(checkedAt);
+  const stale = !Number.isFinite(checkedAtMs) || nowMs - checkedAtMs > USAGE_CACHE_TTL_MS;
+  const usage = entry.usage || null;
+  const fiveHourRemainingPercent = clampPercent(
+    usage?.fiveHourRemainingPercent ??
+      usage?.primaryWindow?.remainingPercent ??
+      null
+  );
+  const weeklyRemainingPercent = clampPercent(
+    usage?.weeklyRemainingPercent ??
+      usage?.secondaryWindow?.remainingPercent ??
+      null
+  );
+
+  return {
+    checkedAt,
+    ok: Boolean(entry.ok),
+    status: String(entry.status || ""),
+    label: String(entry.label || ""),
+    detail: String(entry.detail || ""),
+    stale,
+    usage: usage
+      ? {
+          ...usage,
+          fiveHourRemainingPercent,
+          weeklyRemainingPercent
+        }
+      : null,
+    fiveHourRemainingPercent,
+    weeklyRemainingPercent
+  };
 }
 
 function resolveOpenClawProxySelection(config) {
@@ -695,6 +917,14 @@ async function loadAuthAccounts() {
       const parsed = JSON.parse(raw);
       const isGemini = String(parsed.type || "").trim().toLowerCase() === "gemini";
       const rawAccountId = String(parsed.account_id || parsed.project_id || "").trim();
+      const disabledMarker = String(
+        parsed.disabled_by || parsed.disabledBy || parsed.disabled_source || parsed.disabledSource || ""
+      )
+        .trim()
+        .toLowerCase();
+      const isManagedDisabled =
+        Boolean(parsed.disabled) &&
+        ["dashboard", "manual", "user"].includes(disabledMarker);
       accounts.push({
         file: fileName,
         email: parsed.email || "",
@@ -705,7 +935,9 @@ async function loadAuthAccounts() {
         hasAccessToken: Boolean(parsed.access_token || (isGemini && parsed.token)),
         hasRefreshToken: Boolean(parsed.refresh_token),
         hasIdToken: Boolean(parsed.id_token),
-        disabled: Boolean(parsed.disabled),
+        disabled: isManagedDisabled,
+        disabledRaw: Boolean(parsed.disabled),
+        disabledSource: disabledMarker || "",
         updatedAt: stat.mtime.toISOString()
       });
     } catch (error) {
@@ -816,78 +1048,22 @@ async function importAuthAccount(rawInput, options = {}) {
   };
 }
 
-async function importGeminiToken(rawInput, options = {}) {
-  const payload = extractGeminiTokenPayload(rawInput);
-  const token = String(payload.token || "").trim();
-  if (!token) {
-    throw new Error("missing Gemini access token");
-  }
-
-  const requestedProjectId = String(options.projectId || payload.projectId || "").trim();
-  const requestedEmail = String(payload.email || "").trim();
-  const records = await loadAuthAccountRecords();
-  const geminiRecords = records.filter((entry) => String(entry.parsed?.type || "").trim() === "gemini");
-
-  const targetFile = String(options.targetFile || "").trim();
-  const replaceTarget =
-    targetFile
-      ? await loadAuthRecordByFile(targetFile)
-      : geminiRecords.find((entry) => requestedProjectId && entry.parsed?.project_id === requestedProjectId) ||
-        geminiRecords.find((entry) => requestedEmail && entry.parsed?.email === requestedEmail) ||
-        geminiRecords[0] ||
-        null;
-
-  let fileName;
-  let absolutePath;
-  let replacedExisting = false;
-  if (replaceTarget) {
-    fileName = replaceTarget.fileName;
-    absolutePath = replaceTarget.absolutePath;
-    replacedExisting = true;
-  } else {
-    const fileSeed = `gemini-${sanitizeFileSegment(requestedEmail || requestedProjectId || "manual-token", "manual-token")}`;
-    const target = await buildUniqueAuthFilePath(fileSeed);
-    fileName = target.fileName;
-    absolutePath = target.absolutePath;
-  }
-
-  const projectId = requestedProjectId || String(replaceTarget?.parsed?.project_id || "").trim();
-  const email = requestedEmail || String(replaceTarget?.parsed?.email || "").trim();
-
-  const document = {
-    auto: false,
-    checked: true,
-    disabled: false,
-    token,
-    type: "gemini"
-  };
-  if (email) {
-    document.email = email;
-  }
-  if (projectId) {
-    document.project_id = projectId;
-  }
-
-  await fs.writeFile(absolutePath, `${JSON.stringify(document, null, 2)}\n`, "utf8");
-  await fs.chmod(absolutePath, 0o600);
-
-  return {
-    fileName,
-    absolutePath,
-    email,
-    projectId,
-    targetedFile: targetFile || "",
-    replacedExisting,
-    inheritedProjectId: Boolean(!requestedProjectId && replaceTarget?.parsed?.project_id),
-    inheritedEmail: Boolean(!requestedEmail && replaceTarget?.parsed?.email)
-  };
-}
-
 async function setAccountDisabled(fileName, disabled) {
   const target = resolveAuthFilePath(fileName);
   const raw = await fs.readFile(target.absolutePath, "utf8");
   const parsed = JSON.parse(raw);
-  parsed.disabled = Boolean(disabled);
+  const nextDisabled = Boolean(disabled);
+  parsed.disabled = nextDisabled;
+  if (nextDisabled) {
+    parsed.disabled_by = "dashboard";
+    parsed.disabled_at = new Date().toISOString();
+  } else {
+    delete parsed.disabled_by;
+    delete parsed.disabledBy;
+    delete parsed.disabled_source;
+    delete parsed.disabledSource;
+    delete parsed.disabled_at;
+  }
   parsed.last_refresh = formatIsoOffset(new Date());
   await fs.writeFile(target.absolutePath, `${JSON.stringify(parsed, null, 2)}\n`, "utf8");
   await fs.chmod(target.absolutePath, 0o600);
@@ -1103,6 +1279,73 @@ async function deleteAccountFile(fileName) {
   }
 }
 
+const CLEANUP_REMOVABLE_STATUS_SET = new Set(["invalidated", "token-expired", "refresh-failed"]);
+const CLEANUP_PROTECTED_STATUS_SET = new Set(["cooling-down", "rate-limited", "rate-limit"]);
+
+function normalizeCleanupStatus(status) {
+  return String(status || "")
+    .trim()
+    .toLowerCase()
+    .replace(/_/g, "-");
+}
+
+function classifyCleanupStatus(usageEntry, runtimeEntry) {
+  const usageStatus = normalizeCleanupStatus(usageEntry?.status);
+  const usageDetail = String(usageEntry?.detail || "").toLowerCase();
+  if (usageStatus && CLEANUP_PROTECTED_STATUS_SET.has(usageStatus)) {
+    return {
+      action: "protected",
+      status: usageStatus,
+      source: "usage-cache"
+    };
+  }
+  if (usageStatus && CLEANUP_REMOVABLE_STATUS_SET.has(usageStatus)) {
+    return {
+      action: "candidate",
+      status: usageStatus,
+      source: "usage-cache"
+    };
+  }
+  if (usageStatus === "usage-query-failed") {
+    if (/invalidated|token_invalidated|unauthorized|401/.test(usageDetail)) {
+      return {
+        action: "candidate",
+        status: "invalidated",
+        source: "usage-cache"
+      };
+    }
+    if (/rate limit|429|cooling down/.test(usageDetail)) {
+      return {
+        action: "protected",
+        status: "rate-limited",
+        source: "usage-cache"
+      };
+    }
+  }
+
+  const runtimeStatus = normalizeCleanupStatus(runtimeEntry?.status);
+  if (runtimeStatus === "rate-limited" || runtimeStatus === "cooling-down" || runtimeStatus === "rate-limit") {
+    return {
+      action: "protected",
+      status: runtimeStatus,
+      source: "logs"
+    };
+  }
+  if (runtimeStatus === "invalidated") {
+    return {
+      action: "candidate",
+      status: runtimeStatus,
+      source: "logs"
+    };
+  }
+
+  return {
+    action: "skip",
+    status: usageStatus || runtimeStatus || "unknown",
+    source: usageStatus ? "usage-cache" : runtimeStatus ? "logs" : "none"
+  };
+}
+
 function parseLogTimestamp(line) {
   const match = String(line || "").match(/^\[([0-9-]{10} [0-9:]{8})\]/);
   return match ? match[1] : "";
@@ -1117,18 +1360,26 @@ function parseLogRequestId(line) {
 }
 
 function parseLogAuthHit(line) {
-  const match = String(line).match(
-    /^\[([^\]]+)\].*\[AUTH-HIT\]\s+OAuth provider=([^\s]+)\s+auth_file=([^\s]+)\s+for model\s+([^\s]+)/
-  );
-  if (!match) {
-    return null;
+  const text = String(line || "");
+  const patterns = [
+    /^\[([^\]]+)\].*\[AUTH-HIT\]\s+OAuth provider=([^\s]+)\s+auth_file=([^\s]+)\s+for model\s+([^\s]+)/,
+    /^\[([^\]]+)\].*Use OAuth provider=([^\s]+)\s+auth_file=([^\s]+)\s+for model\s+([^\s]+)/
+  ];
+
+  for (const pattern of patterns) {
+    const match = text.match(pattern);
+    if (!match) {
+      continue;
+    }
+    return {
+      time: match[1],
+      provider: match[2],
+      authFile: match[3],
+      model: match[4]
+    };
   }
-  return {
-    time: match[1],
-    provider: match[2],
-    authFile: match[3],
-    model: match[4]
-  };
+
+  return null;
 }
 
 function buildRecentRuntimeMap(logText) {
@@ -1322,13 +1573,180 @@ async function verifyAuthAccountFile(fileName) {
   });
 }
 
-async function readLogTail(lines = 180) {
+async function queryCodexUsageByFile(fileName) {
+  return withVerificationLock(async () => {
+    const record = await loadAuthRecordByFile(fileName);
+    const parsed = record.parsed || {};
+    const checkedAt = new Date().toISOString();
+    const authType = String(parsed.type || "codex").trim().toLowerCase();
+    const finalize = async (result) => {
+      const usage = result?.usage || null;
+      const primary = usage?.primaryWindow || null;
+      const secondary = usage?.secondaryWindow || null;
+      const normalized = {
+        ...result,
+        fiveHourRemainingPercent: clampPercent(
+          result?.fiveHourRemainingPercent ??
+            usage?.fiveHourRemainingPercent ??
+            primary?.remainingPercent ??
+            null
+        ),
+        weeklyRemainingPercent: clampPercent(
+          result?.weeklyRemainingPercent ??
+            usage?.weeklyRemainingPercent ??
+            secondary?.remainingPercent ??
+            null
+        )
+      };
+      await persistUsageResult(record.fileName, normalized);
+      return normalized;
+    };
+
+    if (authType === "gemini") {
+      return finalize({
+        file: record.fileName,
+        email: parsed.email || "",
+        accountId: parsed.project_id || "",
+        checkedAt,
+        ok: false,
+        status: "unsupported-type",
+        label: "不支持",
+        detail: "Gemini 账号不支持 Codex 用量查询"
+      });
+    }
+
+    let accessToken = String(parsed.access_token || "").trim();
+    let refreshToken = String(parsed.refresh_token || "").trim();
+    let accountId = String(parsed.account_id || "").trim() || extractCodexAccountIdFromAccessToken(accessToken);
+    let refreshedToken = false;
+    let refreshReason = "";
+
+    if (!accessToken) {
+      return finalize({
+        file: record.fileName,
+        email: parsed.email || "",
+        accountId,
+        checkedAt,
+        ok: false,
+        status: "missing-token",
+        label: "缺少 access_token",
+        detail: "认证文件缺少 access_token，无法查询用量"
+      });
+    }
+
+    const persistRefreshedTokens = async (tokens, reason) => {
+      accessToken = String(tokens.accessToken || "").trim();
+      refreshToken = String(tokens.refreshToken || refreshToken).trim();
+      parsed.access_token = accessToken;
+      parsed.id_token = String(tokens.idToken || parsed.id_token || "").trim();
+      parsed.refresh_token = refreshToken;
+      parsed.last_refresh = formatIsoOffset(new Date());
+      const fromToken = extractCodexAccountIdFromAccessToken(accessToken);
+      if (fromToken) {
+        parsed.account_id = fromToken;
+      }
+      accountId = String(parsed.account_id || accountId || "").trim() || fromToken;
+      await writeAuthRecord(record, parsed);
+      refreshedToken = true;
+      refreshReason = reason;
+    };
+
+    if (isJwtLikelyExpired(accessToken)) {
+      if (!refreshToken) {
+        return finalize({
+          file: record.fileName,
+          email: parsed.email || "",
+          accountId,
+          checkedAt,
+          ok: false,
+          status: "token-expired",
+          label: "Token 已过期",
+          detail: "access_token 已过期，且缺少 refresh_token"
+        });
+      }
+      try {
+        const refreshed = await refreshCodexTokens(refreshToken);
+        await persistRefreshedTokens(refreshed, "token-expired");
+      } catch (error) {
+        return finalize({
+          file: record.fileName,
+          email: parsed.email || "",
+          accountId,
+          checkedAt,
+          ok: false,
+          status: "refresh-failed",
+          label: "刷新失败",
+          detail: String(error.message || error)
+        });
+      }
+    }
+
+    try {
+      let payload;
+      try {
+        payload = await fetchCodexUsageOnce(accessToken, accountId);
+      } catch (error) {
+        if (shouldForceCodexTokenRefresh(error.httpStatus, error.detail || error.message) && refreshToken) {
+          const refreshed = await refreshCodexTokens(refreshToken);
+          await persistRefreshedTokens(refreshed, "usage-401");
+          payload = await fetchCodexUsageOnce(accessToken, accountId);
+        } else {
+          throw error;
+        }
+      }
+
+      const usage = normalizeCodexUsagePayload(payload);
+      return finalize({
+        file: record.fileName,
+        email: parsed.email || "",
+        accountId: String(parsed.account_id || accountId || "").trim(),
+        checkedAt,
+        ok: true,
+        status: "usage-ok",
+        label: "用量已更新",
+        detail: summarizeCodexUsage(usage),
+        refreshedToken,
+        refreshReason,
+        usage
+      });
+    } catch (error) {
+      return finalize({
+        file: record.fileName,
+        email: parsed.email || "",
+        accountId: String(parsed.account_id || accountId || "").trim(),
+        checkedAt,
+        ok: false,
+        status: "usage-query-failed",
+        label: "查询失败",
+        detail: String(error.message || error),
+        refreshedToken,
+        refreshReason
+      });
+    }
+  });
+}
+
+async function readLogTailLegacy(lines = 180) {
   try {
     const { stdout } = await runCommand("tail", ["-n", String(lines), LOCAL_LOG_PATH], 10000);
     return stdout;
   } catch (error) {
     return `failed to read log: ${error.message || error}`;
   }
+}
+
+const logAnalyzer = createLogAnalyzer({
+  enabled: LOG_INCREMENTAL_ENABLED,
+  logPath: LOCAL_LOG_PATH,
+  cacheSize: LOG_CACHE_LINES,
+  legacyReadTail: readLogTailLegacy
+});
+
+async function readLogTail(lines = 180, options = {}) {
+  return logAnalyzer.getLogs({
+    lines,
+    alertsOnly: Boolean(options.alertsOnly)
+  });
 }
 
 async function collectHealthSnapshot() {
@@ -1365,29 +1783,144 @@ async function collectHealthSnapshot() {
   };
 }
 
-app.get("/api/health", async (req, res) => {
-  try {
-    const snapshot = await collectHealthSnapshot();
-    res.json(snapshot);
-  } catch (error) {
-    res.status(500).json({ error: String(error.message || error) });
+const taskStore = createTaskStore(500);
+const taskService = createTaskService({
+  store: taskStore,
+  concurrency: TASK_CONCURRENCY,
+  handlers: {
+    "usage-all": createUsageAllRunner({
+      loadAuthAccounts,
+      queryCodexUsageByFile
+    }),
+    "verify-all": createVerifyAllRunner({
+      loadAuthAccounts,
+      verifyAuthAccountFile
+    })
   }
 });
 
-app.get("/api/accounts", async (req, res) => {
-  try {
-    const accounts = await loadAuthAccounts();
-    res.json({
-      count: accounts.length,
-      accounts
+app.get(
+  "/api/health",
+  asyncRoute(async () => {
+    return collectHealthSnapshot();
+  }, { v2Enabled: RESPONSE_V2_ENABLED })
+);
+
+app.get(
+  "/api/accounts",
+  asyncRoute(async () => {
+    const [accounts, usageCache] = await Promise.all([loadAuthAccounts(), readUsageCache()]);
+    const nowMs = Date.now();
+    const enriched = accounts.map((item) => {
+      const fileName = String(item?.file || "");
+      const cached = fileName ? usageCache.entries?.[fileName] : null;
+      const usage = toBackfilledUsage(cached, nowMs);
+      return usage
+        ? {
+            ...item,
+            usage
+          }
+        : item;
     });
-  } catch (error) {
-    res.status(500).json({ error: String(error.message || error) });
-  }
-});
+    return {
+      count: enriched.length,
+      accounts: enriched
+    };
+  }, { v2Enabled: RESPONSE_V2_ENABLED })
+);
 
-app.post("/api/accounts/verify-all", async (req, res) => {
-  try {
+app.post(
+  "/api/accounts/cleanup-invalid",
+  validateBody(schemas.cleanupInvalidBodySchema, SCHEMA_VALIDATION_ENABLED),
+  asyncRoute(async (req) => {
+    const mode = String(req.body?.mode || "dry-run").trim().toLowerCase() === "apply" ? "apply" : "dry-run";
+    const [accounts, usageCache, recentLogText] = await Promise.all([
+      loadAuthAccounts(),
+      readUsageCache(),
+      readLogTail(800)
+    ]);
+    const runtimeByFile = buildRecentRuntimeMap(recentLogText);
+    const scanned = [];
+    const candidates = [];
+    const protectedItems = [];
+    const skipped = [];
+    const removed = [];
+    const failed = [];
+
+    for (const account of accounts) {
+      const fileName = String(account?.file || "");
+      if (!fileName || account?.error) {
+        continue;
+      }
+      const usageEntry = usageCache.entries?.[fileName] || null;
+      const runtimeEntry = runtimeByFile[fileName] || null;
+      const classification = classifyCleanupStatus(usageEntry, runtimeEntry);
+      const item = {
+        file: fileName,
+        email: String(account?.email || ""),
+        status: classification.status,
+        source: classification.source,
+        usageStatus: String(usageEntry?.status || ""),
+        runtimeStatus: String(runtimeEntry?.status || "")
+      };
+      scanned.push(item);
+
+      if (classification.action === "candidate") {
+        candidates.push(item);
+      } else if (classification.action === "protected") {
+        protectedItems.push(item);
+      } else {
+        skipped.push(item);
+      }
+    }
+
+    if (mode === "apply") {
+      for (const item of candidates) {
+        try {
+          // eslint-disable-next-line no-await-in-loop
+          const result = await deleteAccountFile(item.file);
+          removed.push({
+            ...item,
+            removed: Boolean(result?.removed),
+            gone: Boolean(result?.gone)
+          });
+          delete usageCache.entries[item.file];
+        } catch (error) {
+          failed.push({
+            ...item,
+            error: String(error.message || error)
+          });
+        }
+      }
+      usageCache.updatedAt = new Date().toISOString();
+      await writeUsageCache(usageCache);
+    }
+
+    const refreshed = mode === "apply" ? await loadAuthAccounts() : accounts;
+    return {
+      mode,
+      scannedCount: scanned.length,
+      candidateCount: candidates.length,
+      protectedCount: protectedItems.length,
+      skippedCount: skipped.length,
+      removedCount: removed.length,
+      failedCount: failed.length,
+      scanned,
+      candidates,
+      protected: protectedItems,
+      skipped,
+      removed,
+      failed,
+      count: refreshed.length,
+      accounts: refreshed
+    };
+  }, { v2Enabled: RESPONSE_V2_ENABLED })
+);
+
+app.post(
+  "/api/accounts/verify-all",
+  validateBody(schemas.verifyAllBodySchema, SCHEMA_VALIDATION_ENABLED),
+  asyncRoute(async () => {
     const accounts = await loadAuthAccounts();
     const targetFiles = accounts
       .filter((item) => item?.file && !item.error && !item.disabled)
@@ -1395,24 +1928,42 @@ app.post("/api/accounts/verify-all", async (req, res) => {
     const verifications = [];
 
     for (const fileName of targetFiles) {
-      // Run sequentially so the test is 1:1 per auth file and easier to reason about.
-      // This also avoids a verification burst that would distort recent log-based diagnosis.
       // eslint-disable-next-line no-await-in-loop
       verifications.push(await verifyAuthAccountFile(fileName));
     }
 
-    res.json({
-      ok: true,
+    return {
       count: verifications.length,
       verifications
-    });
-  } catch (error) {
-    res.status(500).json({ error: String(error.message || error) });
-  }
-});
+    };
+  }, { v2Enabled: RESPONSE_V2_ENABLED })
+);
 
-app.get("/api/models", async (req, res) => {
-  try {
+app.post(
+  "/api/accounts/usage-all",
+  validateBody(schemas.verifyAllBodySchema, SCHEMA_VALIDATION_ENABLED),
+  asyncRoute(async () => {
+    const accounts = await loadAuthAccounts();
+    const targetFiles = accounts
+      .filter((item) => item?.file && !item.error && !item.disabled)
+      .map((item) => item.file);
+
+    const usages = [];
+    for (const fileName of targetFiles) {
+      // eslint-disable-next-line no-await-in-loop
+      usages.push(await queryCodexUsageByFile(fileName));
+    }
+
+    return {
+      count: usages.length,
+      usages
+    };
+  }, { v2Enabled: RESPONSE_V2_ENABLED })
+);
+
+app.get(
+  "/api/models",
+  asyncRoute(async () => {
     const [ids, selection] = await Promise.all([
       fetchProxyModels(),
       getOpenClawProxySelection().catch(() => ({
@@ -1421,258 +1972,166 @@ app.get("/api/models", async (req, res) => {
         fullId: ""
       }))
     ]);
-    res.json({
+    return {
       count: ids.length,
       ids,
       selected: selection
-    });
-  } catch (error) {
-    res.status(500).json({ error: String(error.message || error) });
-  }
-});
+    };
+  }, { v2Enabled: RESPONSE_V2_ENABLED })
+);
 
-app.post("/api/models/select", async (req, res) => {
-  try {
-    const modelId = String(req.body?.modelId || "");
+app.post(
+  "/api/models/select",
+  asyncRoute(async (req) => {
+    const modelId = String(req.body?.modelId || "").trim();
+    if (!modelId) {
+      throw createApiError(ERROR_CODES.INVALID_INPUT, "modelId is required", { status: 400 });
+    }
     const restart = Boolean(req.body?.restart);
     const selected = await setOpenClawProxyModel(modelId, { restart });
     const ids = await fetchProxyModels();
-    res.json({
-      ok: true,
+    return {
       count: ids.length,
       ids,
       selected
-    });
-  } catch (error) {
-    res.status(500).json({ error: String(error.message || error) });
-  }
-});
+    };
+  }, { v2Enabled: RESPONSE_V2_ENABLED })
+);
 
-app.get("/api/config", async (req, res) => {
-  try {
+app.get(
+  "/api/config",
+  asyncRoute(async () => {
     const [localConfig, activeConfig] = await Promise.all([
       readTextIfExists(LOCAL_CONFIG_PATH),
       readTextIfExists(ACTIVE_CONFIG_PATH)
     ]);
 
-    res.json({
+    return {
       localPath: LOCAL_CONFIG_PATH,
       activePath: ACTIVE_CONFIG_PATH,
       localConfig: redactYamlSecrets(localConfig),
       activeConfig: redactYamlSecrets(activeConfig)
-    });
-  } catch (error) {
-    res.status(500).json({ error: String(error.message || error) });
-  }
-});
+    };
+  }, { v2Enabled: RESPONSE_V2_ENABLED })
+);
 
-app.get("/api/logs", async (req, res) => {
-  try {
+app.get(
+  "/api/logs",
+  asyncRoute(async (req) => {
     const raw = String(req.query.lines || "180");
     const lines = Math.max(20, Math.min(Number(raw) || 180, 800));
-    const text = await readLogTail(lines);
-    res.json({
+    const [text, alertsText] = await Promise.all([
+      readLogTail(lines, { alertsOnly: false }),
+      readLogTail(lines, { alertsOnly: true })
+    ]);
+    return {
       lines,
       logPath: LOCAL_LOG_PATH,
       text,
+      alertsText,
       suppressedAuthHits: getRecentVerificationWindows()
-    });
-  } catch (error) {
-    res.status(500).json({ error: String(error.message || error) });
-  }
-});
+    };
+  }, { v2Enabled: RESPONSE_V2_ENABLED })
+);
 
-app.post("/api/actions/sync", async (req, res) => {
-  try {
+app.post(
+  "/api/actions/sync",
+  asyncRoute(async () => {
     const { stdout, stderr } = await runCommand("bash", [SYNC_SCRIPT_PATH], 120000);
     const health = await collectHealthSnapshot();
-    res.json({
-      ok: true,
+    return {
       stdout,
       stderr,
       health
-    });
-  } catch (error) {
-    res.status(500).json({
-      ok: false,
-      error: String(error.message || error)
-    });
-  }
-});
+    };
+  }, { v2Enabled: RESPONSE_V2_ENABLED })
+);
 
-app.post("/api/accounts/import", async (req, res) => {
-  try {
+app.post(
+  "/api/accounts/import",
+  validateBody(schemas.importAccountBodySchema, SCHEMA_VALIDATION_ENABLED),
+  asyncRoute(async (req) => {
     const rawInput = String(req.body?.raw || req.body?.token || req.body?.payload || "");
     const mode = String(req.body?.mode || "append");
     const targetFile = String(req.body?.targetFile || "");
     const imported = await importAuthAccount(rawInput, { mode, targetFile });
     const accounts = await loadAuthAccounts();
-    res.json({
-      ok: true,
+    return {
       imported,
       count: accounts.length,
       accounts
-    });
-  } catch (error) {
-    res.status(500).json({
-      ok: false,
-      error: String(error.message || error)
-    });
-  }
-});
+    };
+  }, { v2Enabled: RESPONSE_V2_ENABLED })
+);
 
-app.get("/api/gemini-cli/oauth/start", async (req, res) => {
-  try {
-    const projectId = String(req.query.projectId || "").trim();
-    const payload = await startGeminiOAuthSession(projectId);
-    res.json({
-      ok: true,
-      projectId,
-      ...payload
-    });
-  } catch (error) {
-    res.status(500).json({
-      ok: false,
-      error: String(error.message || error)
-    });
-  }
-});
-
-app.get("/api/gemini-cli/oauth/status", async (req, res) => {
-  try {
-    const state = String(req.query.state || "").trim();
-    if (!state) {
-      res.status(400).json({ ok: false, error: "state is required" });
-      return;
-    }
-
-    const payload = await callCliproxyManagement("/v0/management/get-auth-status", {
-      query: { state }
-    });
-    res.json(payload);
-  } catch (error) {
-    res.status(500).json({
-      ok: false,
-      error: String(error.message || error)
-    });
-  }
-});
-
-app.post("/api/gemini-cli/oauth/callback", async (req, res) => {
-  try {
-    const redirectURL = String(req.body?.redirectURL || req.body?.redirect_url || "").trim();
-    const state = String(req.body?.state || "").trim();
-    const code = String(req.body?.code || "").trim();
-    const errorText = String(req.body?.error || "").trim();
-    const projectId = String(req.body?.projectId || req.body?.project_id || "").trim();
-
-    const payload = await submitGeminiOAuthCallback({
-      redirectURL,
-      state,
-      code,
-      errorText,
-      projectId
-    });
-    res.json({
-      ok: true,
-      ...payload
-    });
-  } catch (error) {
-    res.status(500).json({
-      ok: false,
-      error: String(error.message || error)
-    });
-  }
-});
-
-app.post("/api/gemini-cli/token", async (req, res) => {
-  try {
-    const rawInput = String(req.body?.raw || req.body?.token || req.body?.payload || "").trim();
-    const projectId = String(req.body?.projectId || req.body?.project_id || "").trim();
-    const targetFile = String(req.body?.targetFile || "").trim();
-    const imported = await importGeminiToken(rawInput, { projectId, targetFile });
-    const accounts = await loadAuthAccounts();
-    res.json({
-      ok: true,
-      imported,
-      count: accounts.length,
-      accounts
-    });
-  } catch (error) {
-    res.status(500).json({
-      ok: false,
-      error: String(error.message || error)
-    });
-  }
-});
-
-app.post("/api/accounts/:file/verify", async (req, res) => {
-  try {
+app.post(
+  "/api/accounts/:file/verify",
+  validateParams(schemas.verifyFileParamsSchema, SCHEMA_VALIDATION_ENABLED),
+  validateBody(schemas.verifyAllBodySchema, SCHEMA_VALIDATION_ENABLED),
+  asyncRoute(async (req) => {
     const fileName = String(req.params.file || "");
     const verification = await verifyAuthAccountFile(fileName);
-    res.json({
-      ok: true,
+    return {
       verification
-    });
-  } catch (error) {
-    res.status(500).json({
-      ok: false,
-      error: String(error.message || error)
-    });
-  }
-});
+    };
+  }, { v2Enabled: RESPONSE_V2_ENABLED })
+);
 
-app.post("/api/accounts/:file/toggle-disabled", async (req, res) => {
-  try {
+app.post(
+  "/api/accounts/:file/usage",
+  validateParams(schemas.verifyFileParamsSchema, SCHEMA_VALIDATION_ENABLED),
+  asyncRoute(async (req) => {
+    const fileName = String(req.params.file || "");
+    const usage = await queryCodexUsageByFile(fileName);
+    return {
+      usage
+    };
+  }, { v2Enabled: RESPONSE_V2_ENABLED })
+);
+
+app.post(
+  "/api/accounts/:file/toggle-disabled",
+  validateParams(schemas.verifyFileParamsSchema, SCHEMA_VALIDATION_ENABLED),
+  asyncRoute(async (req) => {
     const fileName = String(req.params.file || "");
     const disabled = Boolean(req.body?.disabled);
     await setAccountDisabled(fileName, disabled);
     const accounts = await loadAuthAccounts();
-    res.json({
-      ok: true,
+    return {
       file: fileName,
       disabled,
       count: accounts.length,
       accounts
-    });
-  } catch (error) {
-    res.status(500).json({
-      ok: false,
-      error: String(error.message || error)
-    });
-  }
-});
+    };
+  }, { v2Enabled: RESPONSE_V2_ENABLED })
+);
 
-app.delete("/api/accounts/:file", async (req, res) => {
-  try {
+app.delete(
+  "/api/accounts/:file",
+  validateParams(schemas.verifyFileParamsSchema, SCHEMA_VALIDATION_ENABLED),
+  asyncRoute(async (req) => {
     const fileName = String(req.params.file || "");
     const removed = await deleteAccountFile(fileName);
     const accounts = await loadAuthAccounts();
-    res.json({
-      ok: true,
+    return {
       removed: removed.fileName,
       gone: removed.gone,
       count: accounts.length,
       accounts
-    });
-  } catch (error) {
-    res.status(500).json({
-      ok: false,
-      error: String(error.message || error)
-    });
-  }
-});
+    };
+  }, { v2Enabled: RESPONSE_V2_ENABLED })
+);
 
-app.post("/api/actions/service", async (req, res) => {
-  try {
+app.post(
+  "/api/actions/service",
+  asyncRoute(async (req) => {
     const action = String(req.body?.action || "").trim().toLowerCase();
     if (!["start", "stop", "restart"].includes(action)) {
-      res.status(400).json({ error: "action must be one of start|stop|restart" });
-      return;
+      throw createApiError(ERROR_CODES.INVALID_INPUT, "action must be one of start|stop|restart", { status: 400 });
     }
 
     const label = "com.liuxiaoyu.cliproxyapi";
-    const plistPath = process.env.HOME + "/Library/LaunchAgents/" + label + ".plist";
+    const plistPath = `${process.env.HOME}/Library/LaunchAgents/${label}.plist`;
     let cmd;
     if (SERVICE_MANAGER === "launchctl") {
       if (action === "stop") {
@@ -1680,8 +2139,11 @@ app.post("/api/actions/service", async (req, res) => {
       } else if (action === "start") {
         cmd = { command: "launchctl", args: ["load", plistPath] };
       } else {
-        // restart = unload + load
-        try { await runCommand("launchctl", ["unload", plistPath], 10000); } catch (_) {}
+        try {
+          await runCommand("launchctl", ["unload", plistPath], 10000);
+        } catch {
+          // Ignore unload failure during restart.
+        }
         cmd = { command: "launchctl", args: ["load", plistPath] };
       }
     } else if (SERVICE_MANAGER === "systemd") {
@@ -1692,21 +2154,49 @@ app.post("/api/actions/service", async (req, res) => {
 
     const { stdout, stderr } = await runCommand(cmd.command, cmd.args, 120000);
     const health = await collectHealthSnapshot();
-    res.json({
-      ok: true,
+    return {
       action,
       manager: SERVICE_MANAGER,
       service: CLIPROXY_SERVICE_NAME,
       stdout,
       stderr,
       health
-    });
-  } catch (error) {
-    res.status(500).json({
-      ok: false,
-      error: String(error.message || error)
-    });
+    };
+  }, { v2Enabled: RESPONSE_V2_ENABLED })
+);
+
+registerTaskRoutes(app, {
+  taskModeEnabled: TASK_MODE_ENABLED,
+  taskService,
+  asyncRoute,
+  validateBody,
+  validateParams,
+  validateQuery,
+  schemas,
+  v2Enabled: RESPONSE_V2_ENABLED,
+  schemaValidationEnabled: SCHEMA_VALIDATION_ENABLED
+});
+
+app.use((error, req, res, next) => {
+  if (res.headersSent) {
+    next(error);
+    return;
   }
+  sendError(req, res, error, { v2Enabled: RESPONSE_V2_ENABLED });
+});
+
+app.use("/api/*", (req, res) => {
+  sendError(
+    req,
+    res,
+    createApiError(ERROR_CODES.INVALID_INPUT, `unknown api route: ${req.originalUrl}`, {
+      status: 404,
+      details: {
+        route: req.originalUrl
+      }
+    }),
+    { v2Enabled: RESPONSE_V2_ENABLED }
+  );
 });
 
 app.get("*", (req, res) => {

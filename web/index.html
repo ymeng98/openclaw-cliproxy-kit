@@ -4,69 +4,36 @@
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <title>CLIProxyAPI 控制台</title>
-    <link rel="preconnect" href="https://fonts.googleapis.com" />
-    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
-    <link
-      href="https://fonts.googleapis.com/css2?family=Archivo+Black&family=IBM+Plex+Mono:wght@400;500;700&family=Newsreader:opsz,wght@6..72,400;6..72,500&display=swap"
-      rel="stylesheet"
-    />
     <link rel="stylesheet" href="/styles.css" />
   </head>
   <body>
-    <div class="bg-mesh" aria-hidden="true"></div>
-    <div class="grain" aria-hidden="true"></div>
-
     <header class="topbar">
-      <div>
-        <p class="kicker">LOCAL OPS / CODEx POOL</p>
+      <div class="topbar-main">
+        <p class="kicker">System Console</p>
         <h1>CLIProxyAPI 管理控制台</h1>
       </div>
-      <div class="status-chip" id="service-chip">检查中...</div>
+      <div class="topbar-tools">
+        <div class="status-chip" id="service-chip">检查中...</div>
+        <input id="global-search" class="top-search" type="search" placeholder="搜索账号/模型/文件..." />
+      </div>
     </header>
 
     <nav class="mobile-nav" aria-label="移动端快速导航">
       <a href="#overview-section" class="mobile-nav-link">总览</a>
-      <a href="#ops-section" class="mobile-nav-link">运维</a>
+      <a href="#alerts-section" class="mobile-nav-link">告警</a>
       <a href="#accounts-section" class="mobile-nav-link">账号</a>
       <a href="#models-section" class="mobile-nav-link">模型</a>
+      <a href="#ops-section" class="mobile-nav-link">运维</a>
     </nav>
 
     <main class="layout">
       <section class="panel panel-wide" id="overview-section">
-        <h2>运行总览</h2>
-        <div class="hero-grid">
-          <article class="hero-card hero-card-primary">
-            <div class="hero-head">
-              <span class="hero-kicker">Service Pulse</span>
-              <span class="state-pill idle" id="hero-service-state">检查中</span>
-            </div>
-            <div class="hero-value" id="hero-service-value">-</div>
-            <div class="hero-detail" id="hero-service-detail">监听状态与可用模型加载中</div>
-            <div class="hero-meta" id="hero-service-meta">最近检查：-</div>
-          </article>
-          <article class="hero-card">
-            <div class="hero-head">
-              <span class="hero-kicker">Latest Hit</span>
-              <span class="state-pill idle" id="hero-hit-state">等待请求</span>
-            </div>
-            <div class="hero-value hero-value-compact" id="hero-hit-value">-</div>
-            <div class="hero-detail" id="hero-hit-detail">最近命中的账号与模型会显示在这里</div>
-            <div class="hero-meta" id="hero-hit-meta">Auth File：-</div>
-          </article>
-          <article class="hero-card">
-            <div class="hero-head">
-              <span class="hero-kicker">Model Focus</span>
-              <span class="state-pill idle" id="hero-model-state">待验证</span>
-            </div>
-            <div class="hero-value hero-value-compact" id="hero-model-value">-</div>
-            <div class="hero-detail" id="hero-model-detail">默认模型与最近命中模型将在这里同步</div>
-            <div class="hero-meta" id="hero-model-meta">最近实际命中：-</div>
-          </article>
-        </div>
+        <h2>系统总览</h2>
         <div class="metrics">
           <article class="metric-card">
             <p class="metric-label">服务状态</p>
             <p class="metric-value" id="metric-service">-</p>
+            <p class="metric-meta" id="metric-service-check">最近检查：-</p>
           </article>
           <article class="metric-card">
             <p class="metric-label">代理端口监听</p>
@@ -81,63 +48,16 @@
             <p class="metric-value" id="metric-auths">-</p>
           </article>
         </div>
-        <p class="hint" id="health-hint">最近检查：-</p>
       </section>
 
-      <section class="panel" id="ops-section">
-        <h2>运维操作</h2>
-        <div class="action-grid">
-          <button id="btn-refresh" class="btn btn-main">刷新总览</button>
-          <button id="btn-sync" class="btn">同步账号凭证</button>
-          <button id="btn-restart" class="btn">重启代理服务</button>
-          <button id="btn-start" class="btn">启动服务</button>
-          <button id="btn-stop" class="btn btn-danger">停止服务</button>
-          <button id="btn-models" class="btn">刷新模型清单</button>
-          <button id="btn-logs" class="btn">刷新日志</button>
-          <button id="btn-config" class="btn">刷新配置</button>
-        </div>
-        <div class="hit-panel" id="hit-panel">
-          <div class="hit-head">
-            <span class="hit-title">最近命中账号</span>
-            <span class="state-pill idle" id="hit-state">等待请求</span>
-          </div>
-          <div class="hit-grid">
-            <div class="hit-item">
-              <span class="hit-label">时间</span>
-              <span class="hit-value" id="hit-time">-</span>
-            </div>
-            <div class="hit-item">
-              <span class="hit-label">Provider</span>
-              <span class="hit-value" id="hit-provider">-</span>
-            </div>
-            <div class="hit-item">
-              <span class="hit-label">Model</span>
-              <span class="hit-value" id="hit-model">-</span>
-            </div>
-            <div class="hit-item">
-              <span class="hit-label">邮箱</span>
-              <span class="hit-value" id="hit-email">-</span>
-            </div>
-          </div>
-          <div class="hit-file">
-            <span class="hit-label">Auth File</span>
-            <span class="hit-value" id="hit-auth-file">-</span>
-          </div>
+      <section class="panel" id="alerts-section">
+        <div class="section-head">
+          <h2>告警中心</h2>
+          <button id="btn-logs" class="btn btn-mini" type="button">刷新告警</button>
         </div>
         <details class="subfold" open>
           <summary class="subfold-summary">
-            <span>最近命中历史</span>
-            <span class="state-pill idle" id="history-state">暂无</span>
-          </summary>
-          <div class="subfold-body">
-            <div class="history-panel">
-              <div class="history-list" id="hit-history-list"></div>
-            </div>
-          </div>
-        </details>
-        <details class="subfold subfold-log">
-          <summary class="subfold-summary">
-            <span>异常与告警</span>
+            <span>异常 / 告警日志</span>
             <span class="fold-hint">按需展开</span>
           </summary>
           <div class="subfold-body">
@@ -153,65 +73,13 @@
             <span class="hit-title">失效账号</span>
             <div class="panel-actions">
               <button id="btn-verify-all-accounts" class="btn btn-mini" type="button">一键验证全部账号</button>
+              <button id="btn-usage-all-accounts" class="btn btn-mini" type="button">查询全部用量</button>
               <span class="state-pill idle" id="invalid-accounts-state">待诊断</span>
             </div>
           </div>
           <div id="invalid-accounts-list" class="invalid-list"></div>
         </div>
-        <details class="subfold account-import-fold" open>
-          <summary class="subfold-summary">
-            <span>Gemini CLI 登录入口</span>
-            <span class="fold-hint">支持 Pro 会员 OAuth</span>
-          </summary>
-          <div class="subfold-body">
-            <div class="import-panel oauth-panel">
-              <label class="import-label" for="gemini-project-id">Project ID</label>
-              <input
-                id="gemini-project-id"
-                class="oauth-input"
-                type="text"
-                placeholder="留空自动发现，或填 GOOGLE_ONE / ALL / 具体 project_id"
-              />
-              <div class="oauth-actions">
-                <button id="btn-gemini-auth-start" class="btn btn-main" type="button">生成 Gemini 登录链接</button>
-                <button id="btn-gemini-auth-check" class="btn" type="button">检查登录状态</button>
-                <span class="state-pill idle" id="gemini-auth-state">未启动</span>
-              </div>
-              <a
-                id="gemini-auth-link"
-                class="oauth-link is-hidden"
-                href="#"
-                target="_blank"
-                rel="noreferrer noopener"
-              >打开 Google 登录页</a>
-              <p class="hint import-hint">
-                先点上面按钮生成链接，再在当前浏览器里手动打开。这样浏览器不会被自动弹窗打断；只有自动回跳失败时，才需要手动粘贴回调地址。
-              </p>
-              <label class="import-label" for="gemini-token-input">手动导入 Gemini token</label>
-              <textarea
-                id="gemini-token-input"
-                class="import-input oauth-callback-input"
-                placeholder='粘贴 access_token 字符串，或 {"access_token":"ya29...","project_id":"..."}'
-              ></textarea>
-              <div class="oauth-actions">
-                <button id="btn-gemini-token-import" class="btn" type="button">保存手动 token</button>
-              </div>
-              <p class="hint import-hint">
-                如果你已经能拿到 Gemini CLI 的 access token，可以直接粘贴这里。未填写 Project ID 时，会优先沿用当前 Gemini auth 文件里的 project_id。
-              </p>
-              <label class="import-label" for="gemini-auth-callback">手动回调地址</label>
-              <textarea
-                id="gemini-auth-callback"
-                class="import-input oauth-callback-input"
-                placeholder="粘贴浏览器最后跳转到的完整地址，例如 http://localhost:8085/oauth2callback?code=..."
-              ></textarea>
-              <div class="oauth-actions">
-                <button id="btn-gemini-auth-submit-callback" class="btn" type="button">提交手动回调</button>
-              </div>
-              <pre id="gemini-auth-output" class="output-box oauth-output">Gemini CLI 登录未启动。</pre>
-            </div>
-          </div>
-        </details>
+
         <details class="subfold account-import-fold">
           <summary class="subfold-summary">
             <span>新增 / 替换账号凭证</span>
@@ -234,7 +102,7 @@
               ></textarea>
               <div class="import-actions">
                 <div class="import-options">
-                  <button id="btn-import-account" class="btn btn-main">写入账号文件</button>
+                  <button id="btn-import-account" class="btn btn-main" type="button">写入账号文件</button>
                   <label class="import-check">
                     <input id="account-import-replace" type="checkbox" />
                     <span>同账号覆盖最近文件</span>
@@ -245,11 +113,54 @@
             </div>
           </div>
         </details>
+
         <div id="accounts-grid" class="accounts-grid"></div>
+        <template id="account-card-template">
+          <article class="account-card-lite">
+            <div class="account-card-head">
+              <div class="account-ident">
+                <div class="account-email" data-role="email">-</div>
+              </div>
+              <div class="account-meta-lite">
+                <span class="state-pill idle" data-role="status">-</span>
+                <span class="state-pill idle is-hidden" data-role="usage-stale">缓存</span>
+              </div>
+            </div>
+
+            <div class="account-hit-lite">
+              <span class="hit-label">最近命中时间</span>
+              <span class="hit-value" data-role="last-hit">-</span>
+            </div>
+
+            <div class="usage-grid">
+              <div class="usage-item">
+                <div class="usage-line">
+                  <span>5小时剩余</span>
+                  <span data-role="today-text">--%</span>
+                </div>
+                <div class="usage-bar">
+                  <span class="usage-fill tone-na" data-role="today-bar"></span>
+                </div>
+              </div>
+              <div class="usage-item">
+                <div class="usage-line">
+                  <span>每周剩余</span>
+                  <span data-role="cycle-text">--%</span>
+                </div>
+                <div class="usage-bar">
+                  <span class="usage-fill tone-na" data-role="cycle-bar"></span>
+                </div>
+              </div>
+            </div>
+          </article>
+        </template>
       </section>
 
       <section class="panel" id="models-section">
-        <h2>模型列表</h2>
+        <div class="section-head">
+          <h2>模型列表</h2>
+          <button id="btn-models" class="btn btn-mini" type="button">刷新模型</button>
+        </div>
         <div class="model-toolbar">
           <p class="hint" id="models-hint">点击模型可直接设为 OpenClaw 当前默认代理模型。</p>
           <label class="import-check">
@@ -276,6 +187,29 @@
         <div id="models-grid" class="model-grid"></div>
       </section>
 
+      <section class="panel" id="ops-section">
+        <h2>运维操作</h2>
+        <div class="action-grid">
+          <button id="btn-refresh" class="btn btn-main" type="button">刷新总览</button>
+          <button id="btn-sync" class="btn" type="button">同步账号凭证</button>
+          <button id="btn-start" class="btn" type="button">启动服务</button>
+          <button id="btn-config" class="btn" type="button">刷新配置</button>
+        </div>
+
+        <details class="subfold">
+          <summary class="subfold-summary">
+            <span>高级操作（谨慎）</span>
+            <span class="fold-hint">包含重启/停止</span>
+          </summary>
+          <div class="subfold-body">
+            <div class="action-grid advanced-actions">
+              <button id="btn-restart" class="btn" type="button">重启代理服务</button>
+              <button id="btn-stop" class="btn btn-danger" type="button">停止服务</button>
+            </div>
+          </div>
+        </details>
+      </section>
+
       <section class="panel panel-wide" id="config-section">
         <details class="fold-panel">
           <summary class="fold-summary">
@@ -296,15 +230,14 @@
           </div>
         </details>
       </section>
-
     </main>
 
     <div id="verify-all-modal" class="modal-backdrop is-hidden" aria-hidden="true">
       <div class="modal-card" role="dialog" aria-modal="true" aria-labelledby="verify-all-modal-title">
         <div class="modal-head">
           <div>
-            <div class="kicker">BATCH VERIFY</div>
-            <h3 id="verify-all-modal-title">一键检测账号日志</h3>
+            <div class="kicker">Batch Task</div>
+            <h3 id="verify-all-modal-title">批量任务进度</h3>
           </div>
           <button id="btn-verify-all-modal-close" class="btn btn-mini" type="button">关闭</button>
         </div>
@@ -312,7 +245,8 @@
       </div>
     </div>
 
-    <div id="toast" class="toast"></div>
+    <div id="toast" class="toast" role="status" aria-live="polite"></div>
+
     <script src="/app.js" defer></script>
   </body>
 </html>

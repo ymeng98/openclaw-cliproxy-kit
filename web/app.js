@@ -2,47 +2,19 @@ const $ = (id) => document.getElementById(id);
 
 const nodes = {
   serviceChip: $("service-chip"),
-  heroServiceState: $("hero-service-state"),
-  heroServiceValue: $("hero-service-value"),
-  heroServiceDetail: $("hero-service-detail"),
-  heroServiceMeta: $("hero-service-meta"),
-  heroHitState: $("hero-hit-state"),
-  heroHitValue: $("hero-hit-value"),
-  heroHitDetail: $("hero-hit-detail"),
-  heroHitMeta: $("hero-hit-meta"),
-  heroModelState: $("hero-model-state"),
-  heroModelValue: $("hero-model-value"),
-  heroModelDetail: $("hero-model-detail"),
-  heroModelMeta: $("hero-model-meta"),
   metricService: $("metric-service"),
+  metricServiceCheck: $("metric-service-check"),
   metricPort: $("metric-port"),
   metricModels: $("metric-models"),
   metricAuths: $("metric-auths"),
-  healthHint: $("health-hint"),
   output: $("ops-output"),
-  hitState: $("hit-state"),
-  hitTime: $("hit-time"),
-  hitProvider: $("hit-provider"),
-  hitModel: $("hit-model"),
-  hitEmail: $("hit-email"),
-  hitAuthFile: $("hit-auth-file"),
-  historyState: $("history-state"),
-  hitHistoryList: $("hit-history-list"),
   invalidAccountsState: $("invalid-accounts-state"),
   invalidAccountsList: $("invalid-accounts-list"),
   invalidPanel: document.querySelector(".invalid-panel"),
   verifyAllAccounts: $("btn-verify-all-accounts"),
+  usageAllAccounts: $("btn-usage-all-accounts"),
   accounts: $("accounts-grid"),
-  geminiProjectId: $("gemini-project-id"),
-  geminiAuthStart: $("btn-gemini-auth-start"),
-  geminiAuthCheck: $("btn-gemini-auth-check"),
-  geminiAuthSubmitCallback: $("btn-gemini-auth-submit-callback"),
-  geminiTokenInput: $("gemini-token-input"),
-  geminiTokenImport: $("btn-gemini-token-import"),
-  geminiAuthState: $("gemini-auth-state"),
-  geminiAuthLink: $("gemini-auth-link"),
-  geminiAuthCallback: $("gemini-auth-callback"),
-  geminiAuthOutput: $("gemini-auth-output"),
+  accountCardTemplate: $("account-card-template"),
   verifyAllModal: $("verify-all-modal"),
   verifyAllModalClose: $("btn-verify-all-modal-close"),
   verifyAllModalOutput: $("verify-all-modal-output"),
@@ -59,7 +31,8 @@ const nodes = {
   modelLastHit: $("model-last-hit"),
   localConfig: $("local-config"),
   activeConfig: $("active-config"),
-  toast: $("toast")
+  toast: $("toast"),
+  globalSearch: $("global-search")
 };
 
 const HEARTBEAT_INTERVAL_MS = 12000;
@@ -76,24 +49,19 @@ const heartbeatState = {
 const viewState = {
   renderedLogText: "",
   latestAuthHit: null,
-  recentAuthHits: [],
   accounts: [],
-  accountEmailByFile: {},
   accountRuntimeByFile: {},
   accountVerificationByFile: {},
+  accountUsageByFile: {},
   accountGroupCountByKey: {},
   importTargetFile: "",
+  searchQuery: "",
   localSuppressedAuthHitWindows: [],
-  geminiAuth: {
-    state: "",
-    url: "",
-    projectId: "",
-    pollTimerId: null
-  },
   selectedModel: {
     fullId: "",
     modelId: ""
   },
+  modelIds: [],
   suppressedAuthHitWindows: []
 };
 
@@ -114,7 +82,10 @@ async function api(path, options = {}) {
   }
 
   if (!response.ok) {
-    const message = payload.error || payload.message || `${response.status} ${response.statusText}`;
+    const message =
+      (payload?.error && typeof payload.error === "object" ? payload.error.message : payload?.error) ||
+      payload?.message ||
+      `${response.status} ${response.statusText}`;
     throw new Error(message);
   }
   return payload;
@@ -148,57 +119,6 @@ function closeVerifyAllModal() {
   nodes.verifyAllModal.setAttribute("aria-hidden", "true");
 }
 
-function clearGeminiAuthPolling() {
-  if (viewState.geminiAuth.pollTimerId) {
-    clearTimeout(viewState.geminiAuth.pollTimerId);
-    viewState.geminiAuth.pollTimerId = null;
-  }
-}
-
-function setGeminiAuthState(text, tone = "idle") {
-  if (!nodes.geminiAuthState) {
-    return;
-  }
-  nodes.geminiAuthState.textContent = text;
-  nodes.geminiAuthState.className = `state-pill ${tone}`;
-}
-
-function setGeminiAuthOutput(lines) {
-  if (!nodes.geminiAuthOutput) {
-    return;
-  }
-  const text = Array.isArray(lines) ? lines.join("\n") : String(lines || "");
-  nodes.geminiAuthOutput.textContent = text;
-}
-
-function setGeminiAuthLink(url) {
-  if (!nodes.geminiAuthLink) {
-    return;
-  }
-  const normalized = String(url || "").trim();
-  if (!normalized) {
-    nodes.geminiAuthLink.href = "#";
-    nodes.geminiAuthLink.classList.add("is-hidden");
-    return;
-  }
-  nodes.geminiAuthLink.href = normalized;
-  nodes.geminiAuthLink.classList.remove("is-hidden");
-}
-
-function scheduleGeminiAuthPoll(delay = 2000) {
-  clearGeminiAuthPolling();
-  if (!viewState.geminiAuth.state) {
-    return;
-  }
-  viewState.geminiAuth.pollTimerId = window.setTimeout(async () => {
-    try {
-      await checkGeminiAuthStatus({ silent: true });
-    } catch {
-      scheduleGeminiAuthPoll(3000);
-    }
-  }, delay);
-}
-
 function showToast(message, isError = false) {
   nodes.toast.textContent = message;
   nodes.toast.style.borderColor = isError ? "rgba(255,94,94,0.66)" : "rgba(97,224,200,0.55)";
@@ -227,44 +147,146 @@ function renderHealth(health) {
   const modelCount = Number(health?.models?.count || 0);
   const authCount = Number(health?.accounts?.count || 0);
   const checkedAt = health?.now ? new Date(health.now).toLocaleString() : "-";
-  const suffix = health?.models?.error ? ` | 模型检查失败: ${health.models.error}` : "";
+  const suffix = health?.models?.error ? `（模型检查失败: ${health.models.error}）` : "";
 
   nodes.metricService.textContent = serviceState;
+  if (nodes.metricServiceCheck) {
+    nodes.metricServiceCheck.textContent = `最近检查：${checkedAt}${suffix}`;
+  }
   nodes.metricPort.textContent = listening;
   nodes.metricModels.textContent = String(modelCount);
   nodes.metricAuths.textContent = String(authCount);
-  nodes.healthHint.textContent = `最近检查：${checkedAt}${suffix}`;
 
   const chip = classifyServiceChip(health);
   nodes.serviceChip.textContent = chip.text;
   nodes.serviceChip.className = chip.className;
-
-  if (nodes.heroServiceState) {
-    nodes.heroServiceState.textContent = chip.text;
-    nodes.heroServiceState.className = chip.className.replace("status-chip", "state-pill");
-  }
-  if (nodes.heroServiceValue) {
-    nodes.heroServiceValue.textContent = serviceState;
-  }
-  if (nodes.heroServiceDetail) {
-    nodes.heroServiceDetail.textContent = `监听 ${listening} · 模型 ${modelCount} · 认证 ${authCount}`;
-  }
-  if (nodes.heroServiceMeta) {
-    nodes.heroServiceMeta.textContent = `最近检查：${checkedAt}`;
-  }
-}
-
-function tokenPill(label, ok) {
-  const cls = ok ? "token-pill ok" : "token-pill no";
-  return `<span class="${cls}">${label}:${ok ? "Y" : "N"}</span>`;
+  nodes.metricService.textContent = `${chip.text} / ${serviceState}`;
 }
 
 function getAccountVerification(fileName) {
   return viewState.accountVerificationByFile[fileName] || null;
 }
 
+function getAccountUsage(fileName) {
+  return viewState.accountUsageByFile[fileName] || null;
+}
+
 function getRuntimeStatus(fileName) {
   return viewState.accountRuntimeByFile[fileName] || null;
+}
+
+function normPercent(v) {
+  const n = Number(v);
+  if (!Number.isFinite(n)) {
+    return null;
+  }
+  return Math.max(0, Math.min(100, Math.round(n)));
+}
+
+function usageTone(p) {
+  if (p === null) {
+    return "na";
+  }
+  if (p <= 15) {
+    return "danger";
+  }
+  if (p <= 40) {
+    return "warn";
+  }
+  return "ok";
+}
+
+function getUsagePercents(usage) {
+  const scopedUsage = usage?.usage || usage || {};
+  const primary = scopedUsage?.primaryWindow || {};
+  const secondary = scopedUsage?.secondaryWindow || {};
+  const primaryUsed = normPercent(primary?.usedPercent);
+  const secondaryUsed = normPercent(secondary?.usedPercent);
+  const today = normPercent(
+    usage?.fiveHourRemainingPercent ??
+      scopedUsage?.fiveHourRemainingPercent ??
+      primary?.remainingPercent ??
+      (primaryUsed === null ? null : 100 - primaryUsed)
+  );
+  const cycle = normPercent(
+    usage?.weeklyRemainingPercent ??
+      scopedUsage?.weeklyRemainingPercent ??
+      secondary?.remainingPercent ??
+      (secondaryUsed === null ? null : 100 - secondaryUsed)
+  );
+  return {
+    today,
+    cycle,
+    stale: Boolean(usage?.stale)
+  };
+}
+
+function riskScore(acc) {
+  const usage = getAccountUsage(acc?.file || "") || acc?.usage || null;
+  const { today, cycle } = getUsagePercents(usage);
+  const score = Math.max(
+    today === null ? -1 : 100 - today,
+    cycle === null ? -1 : 100 - cycle
+  );
+  return Number.isFinite(score) ? score : -1;
+}
+
+function buildRuntimeFromVerification(verification) {
+  if (!verification || typeof verification !== "object") {
+    return null;
+  }
+
+  const checkedAtText = verification.checkedAt
+    ? new Date(verification.checkedAt).toLocaleTimeString("zh-CN", { hour12: false })
+    : "-";
+  const status = String(verification.status || "").trim().toLowerCase();
+
+  if (verification.ok || status === "valid") {
+    return {
+      label: "验证通过",
+      tone: "active",
+      lastOutcome: `${checkedAtText} ${verification.label || "模型返回OK"}`,
+      suggestion: "账号可正常使用"
+    };
+  }
+
+  if (status === "invalidated" || status === "unauthorized") {
+    return {
+      label: "认证失败",
+      tone: "bad",
+      lastOutcome: `${checkedAtText} ${verification.detail || verification.label || "认证失败"}`,
+      suggestion: "重新登录该账号后再验证"
+    };
+  }
+
+  if (status === "rate-limited" || status === "cooling-down") {
+    return {
+      label: "请求限流",
+      tone: "warnish",
+      lastOutcome: `${checkedAtText} ${verification.detail || verification.label || "触发限流"}`,
+      suggestion: "等待冷却后重试"
+    };
+  }
+
+  if (status === "missing-token") {
+    return {
+      label: "缺少凭证",
+      tone: "bad",
+      lastOutcome: `${checkedAtText} ${verification.detail || verification.label || "缺少 access_token"}`,
+      suggestion: "补充可用凭证后再验证"
+    };
+  }
+
+  if (status === "upstream-500" || status === "proxy-error" || status === "proxy-check-failed") {
+    return {
+      label: verification.label || "代理异常",
+      tone: "disabled",
+      lastOutcome: `${checkedAtText} ${verification.detail || verification.label || "验证失败"}`,
+      suggestion: "检查代理服务与上游状态"
+    };
+  }
+
+  return null;
 }
 
 function describeAccountIssue(acc) {
@@ -324,87 +346,89 @@ function renderImportTarget() {
 }
 
 function renderAccountCard(acc) {
-  const runtime = getRuntimeStatus(acc.file);
-  const verification = getAccountVerification(acc.file);
-  const issue = describeAccountIssue(acc);
-  const runtimeBadge = runtime
-    ? `<span class="state-pill ${runtime.tone}">${runtime.label}</span>`
-    : `<span class="state-pill idle">未诊断</span>`;
-  const verificationBadge = verification
-    ? `<span class="state-pill ${verification.ok ? "active" : issue?.severity || "idle"}">${verification.label || "已验证"}</span>`
-    : "";
-  const runtimeNote = runtime
-    ? `
-      <div class="account-runtime">
-        <div>最近命中: ${runtime.lastHitTime || "-"}</div>
-        <div>最近结果: ${runtime.lastOutcome || "-"}</div>
-        <div>建议: ${runtime.suggestion || "-"}</div>
-      </div>
-    `
-    : `
-      <div class="account-runtime">
-        <div>最近命中: -</div>
-        <div>最近结果: 暂无近期开销</div>
-        <div>建议: 等待该文件参与轮询后再判断</div>
-      </div>
-    `;
-  const verifyNote = verification
-    ? `
-      <div class="account-runtime">
-        <div>验证时间: ${verification.checkedAt ? new Date(verification.checkedAt).toLocaleString() : "-"}</div>
-        <div>验证结果: ${verification.detail || verification.label || "-"}</div>
-      </div>
-    `
-    : "";
-
-  if (acc.error) {
-    return `
-      <article class="account-card">
-        <div class="account-top">
-          <div>
-            <div class="account-file">${acc.file || "unknown"}</div>
-            <div class="account-mail">解析失败</div>
-          </div>
-        </div>
-        <div class="account-meta"><div>${acc.error}</div></div>
-      </article>
-    `;
+  if (!nodes.accountCardTemplate || !(nodes.accountCardTemplate instanceof HTMLTemplateElement)) {
+    return null;
   }
 
-  return `
-    <article class="account-card">
-      <div class="account-top">
-        <div>
-          <div class="account-file">${acc.file}</div>
-          <div class="account-mail">${acc.email || "无邮箱字段"}</div>
-        </div>
-        <div class="account-side">
-          <div class="account-file">${acc.type || "-"}</div>
-          ${acc.disabled ? `<span class="state-pill disabled">已禁用</span>` : `<span class="state-pill active">启用中</span>`}
-          ${runtimeBadge}
-          ${verificationBadge}
+  if (acc.error) {
+    const fallback = document.createElement("article");
+    fallback.className = "account-card-lite";
+    fallback.innerHTML = `
+      <div class="account-card-head">
+        <div class="account-ident">
+          <div class="account-email">${acc.file || "unknown"}</div>
+          <div class="account-file-lite">解析失败</div>
         </div>
       </div>
-      <div class="account-meta">
-        <div>account: ${acc.accountId || "-"}</div>
-        <div>refresh: ${acc.lastRefresh || "-"}</div>
-        <div>updated: ${acc.updatedAt ? new Date(acc.updatedAt).toLocaleString() : "-"}</div>
-      </div>
-      ${runtimeNote}
-      ${verifyNote}
-      <div>
-        ${tokenPill("access", acc.hasAccessToken)}
-        ${tokenPill("refresh", acc.hasRefreshToken)}
-        ${tokenPill("id", acc.hasIdToken)}
-      </div>
-      <div class="account-actions">
-        <button class="btn btn-mini" data-action="verify-account" data-file="${acc.file}">验证</button>
-        <button class="btn btn-mini" data-action="prepare-reauth" data-file="${acc.file}">替换凭证</button>
-        <button class="btn btn-mini" data-action="toggle-disabled" data-file="${acc.file}" data-disabled="${acc.disabled ? "false" : "true"}">${acc.disabled ? "启用" : "禁用"}</button>
-        <button class="btn btn-mini btn-danger" data-action="delete-account" data-file="${acc.file}">删除</button>
-      </div>
-    </article>
-  `;
+      <div class="account-hit-lite">${acc.error}</div>
+    `;
+    return fallback;
+  }
+
+  const fragment = nodes.accountCardTemplate.content.cloneNode(true);
+  const card = fragment.querySelector(".account-card-lite");
+  if (!card) {
+    return null;
+  }
+
+  const usage = getAccountUsage(acc.file) || acc.usage || null;
+  const runtime = getRuntimeStatus(acc.file) || {};
+  const { today, cycle, stale } = getUsagePercents(usage);
+  const minRemaining = Math.min(today ?? 101, cycle ?? 101);
+
+  const emailNode = card.querySelector('[data-role="email"]');
+  const statusNode = card.querySelector('[data-role="status"]');
+  const staleNode = card.querySelector('[data-role="usage-stale"]');
+  const hitNode = card.querySelector('[data-role="last-hit"]');
+  const todayTextNode = card.querySelector('[data-role="today-text"]');
+  const cycleTextNode = card.querySelector('[data-role="cycle-text"]');
+  const todayBarNode = card.querySelector('[data-role="today-bar"]');
+  const cycleBarNode = card.querySelector('[data-role="cycle-bar"]');
+
+  if (emailNode) {
+    emailNode.textContent = acc.email || "无邮箱字段";
+  }
+  if (statusNode) {
+    statusNode.textContent = acc.disabled ? "已禁用" : "启用中";
+    let statusClass = "active";
+    if (acc.disabled) {
+      statusClass = "disabled";
+    } else if (today === null && cycle === null) {
+      statusClass = "idle";
+    } else if (minRemaining <= 15) {
+      statusClass = "bad";
+    } else if (minRemaining <= 40) {
+      statusClass = "warnish";
+    }
+    statusNode.className = `state-pill ${statusClass}`;
+  }
+  if (staleNode) {
+    staleNode.textContent = "缓存过期";
+    staleNode.className = `state-pill ${stale ? "warnish" : "is-hidden"}`;
+    staleNode.classList.toggle("is-hidden", !stale);
+  }
+  if (hitNode) {
+    hitNode.textContent = runtime.lastHitTime || "-";
+  }
+
+  const todayText = today === null ? "--%" : `${today}%`;
+  const cycleText = cycle === null ? "--%" : `${cycle}%`;
+  if (todayTextNode) {
+    todayTextNode.textContent = todayText;
+  }
+  if (cycleTextNode) {
+    cycleTextNode.textContent = cycleText;
+  }
+  if (todayBarNode) {
+    todayBarNode.style.width = today === null ? "0%" : `${today}%`;
+    todayBarNode.className = `usage-fill tone-${usageTone(today)}`;
+  }
+  if (cycleBarNode) {
+    cycleBarNode.style.width = cycle === null ? "0%" : `${cycle}%`;
+    cycleBarNode.className = `usage-fill tone-${usageTone(cycle)}`;
+  }
+
+  return card;
 }
 
 function accountGroupKey(acc) {
@@ -414,11 +438,6 @@ function accountGroupKey(acc) {
 function renderAccounts(payload) {
   const accounts = Array.isArray(payload?.accounts) ? payload.accounts : [];
   viewState.accounts = accounts;
-  viewState.accountEmailByFile = Object.fromEntries(
-    accounts
-      .filter((acc) => acc?.file)
-      .map((acc) => [acc.file, acc.email || ""])
-  );
   viewState.accountGroupCountByKey = accounts.reduce((acc, item) => {
     const key = String(item?.rawAccountId || item?.accountId || item?.email || item?.file || "");
     if (!key) {
@@ -427,69 +446,51 @@ function renderAccounts(payload) {
     acc[key] = (acc[key] || 0) + 1;
     return acc;
   }, {});
-  if (viewState.latestAuthHit) {
-    renderLatestAuthHit(viewState.latestAuthHit);
+  const allowedFiles = new Set(accounts.filter((item) => item?.file).map((item) => item.file));
+  const retainedUsageByFile = Object.fromEntries(
+    Object.entries(viewState.accountUsageByFile).filter(([fileName]) => allowedFiles.has(fileName))
+  );
+  for (const account of accounts) {
+    if (account?.file && account?.usage) {
+      retainedUsageByFile[account.file] = account.usage;
+    }
   }
-  if (viewState.recentAuthHits.length) {
-    renderHitHistory(viewState.recentAuthHits);
-  }
+  viewState.accountUsageByFile = retainedUsageByFile;
   renderInvalidAccounts();
   if (!accounts.length) {
     nodes.accounts.innerHTML = `<div class="account-card">未发现认证文件。</div>`;
     return;
   }
+  const keyword = String(viewState.searchQuery || "").trim().toLowerCase();
+  const filtered = keyword
+    ? accounts.filter((item) => {
+        const text = [
+          item?.email || "",
+          item?.file || "",
+          item?.type || "",
+          item?.accountId || ""
+        ]
+          .join(" ")
+          .toLowerCase();
+        return text.includes(keyword);
+      })
+    : accounts;
 
-  const grouped = new Map();
-  for (const acc of accounts) {
-    const key = accountGroupKey(acc);
-    const bucket = grouped.get(key) || [];
-    bucket.push(acc);
-    grouped.set(key, bucket);
+  const sorted = filtered
+    .slice()
+    .sort((a, b) => riskScore(b) - riskScore(a));
+
+  nodes.accounts.innerHTML = "";
+  if (!sorted.length) {
+    nodes.accounts.innerHTML = `<div class="history-empty">没有匹配当前搜索条件的账号</div>`;
+    return;
   }
-
-  nodes.accounts.innerHTML = Array.from(grouped.values())
-    .map((group) => {
-      if (group.length === 1) {
-        return renderAccountCard(group[0]);
-      }
-
-      const sample = group[0];
-      const emails = [...new Set(group.map((item) => item.email).filter(Boolean))];
-      const hasDisabled = group.some((item) => item.disabled);
-      const latestUpdated = group
-        .map((item) => item.updatedAt)
-        .filter(Boolean)
-        .sort()
-        .reverse()[0];
-      const latestHitFile = String(viewState.latestAuthHit?.authFile || "");
-      const isLatestHitGroup = group.some((item) => item.file === latestHitFile);
-
-      return `
-        <section class="account-group">
-          <div class="account-group-summary">
-            <div class="account-group-head">
-              <div>
-                <div class="account-group-title">同账号组 ${group.length}</div>
-                <div class="account-group-subtitle">${emails.join(" / ") || sample.accountId || "同一账号"}</div>
-              </div>
-              <div class="account-group-badges">
-                <span class="state-pill ${hasDisabled ? "disabled" : "active"}">${hasDisabled ? "含禁用项" : "全部启用"}</span>
-                <span class="state-pill warnish">${sample.accountId || "同账号"}</span>
-              </div>
-            </div>
-            <div class="account-group-meta">
-              <span>文件数: ${group.length}</span>
-              <span>最近更新: ${latestUpdated ? new Date(latestUpdated).toLocaleString() : "-"}</span>
-              <span>${isLatestHitGroup ? "当前命中组" : "并列展示"}</span>
-            </div>
-          </div>
-          <div class="account-group-body">
-            ${group.map((item) => renderAccountCard(item)).join("")}
-          </div>
-        </section>
-      `;
-    })
-    .join("");
+  for (const item of sorted) {
+    const card = renderAccountCard(item);
+    if (card) {
+      nodes.accounts.appendChild(card);
+    }
+  }
 }
 
 function renderInvalidAccounts() {
@@ -534,7 +535,6 @@ function renderInvalidAccounts() {
             <div>最近验证: ${verification?.checkedAt ? new Date(verification.checkedAt).toLocaleString() : "-"}</div>
           </div>
           <div class="account-actions">
-            <button class="btn btn-mini" data-action="verify-account" data-file="${acc.file}">重新验证</button>
             <button class="btn btn-mini btn-main" data-action="prepare-reauth" data-file="${acc.file}">准备重登</button>
           </div>
         </article>
@@ -547,6 +547,7 @@ function renderModels(payload) {
   const ids = Array.isArray(payload?.ids) ? payload.ids : [];
   const selectedModel = String(payload?.selected?.modelId || "");
   const selectedFullId = String(payload?.selected?.fullId || "");
+  viewState.modelIds = ids;
   viewState.selectedModel = {
     modelId: selectedModel,
     fullId: selectedFullId
@@ -556,7 +557,14 @@ function renderModels(payload) {
     return;
   }
 
-  nodes.models.innerHTML = ids
+  const keyword = String(viewState.searchQuery || "").trim().toLowerCase();
+  const visibleIds = keyword ? ids.filter((id) => String(id || "").toLowerCase().includes(keyword)) : ids;
+  if (!visibleIds.length) {
+    nodes.models.innerHTML = `<span class="model-chip">没有匹配当前搜索条件的模型</span>`;
+    return;
+  }
+
+  nodes.models.innerHTML = visibleIds
     .map((id) => {
       const active = id === selectedModel;
       return `
@@ -585,57 +593,6 @@ function renderConfig(payload) {
   nodes.activeConfig.textContent = payload?.activeConfig || "读取失败";
 }
 
-function renderLatestAuthHit(hit) {
-  viewState.latestAuthHit = hit || null;
-  if (!hit) {
-    nodes.hitState.textContent = "等待请求";
-    nodes.hitState.className = "state-pill idle";
-    nodes.hitTime.textContent = "-";
-    nodes.hitProvider.textContent = "-";
-    nodes.hitModel.textContent = "-";
-    nodes.hitEmail.textContent = "-";
-    nodes.hitAuthFile.textContent = "-";
-    if (nodes.heroHitState) {
-      nodes.heroHitState.textContent = "等待请求";
-      nodes.heroHitState.className = "state-pill idle";
-    }
-    if (nodes.heroHitValue) {
-      nodes.heroHitValue.textContent = "-";
-    }
-    if (nodes.heroHitDetail) {
-      nodes.heroHitDetail.textContent = "最近命中的账号与模型会显示在这里";
-    }
-    if (nodes.heroHitMeta) {
-      nodes.heroHitMeta.textContent = "Auth File：-";
-    }
-    renderModelState();
-    return;
-  }
-
-  const resolvedEmail = guessEmailFromAuthFile(hit.authFile) || hit.email || "-";
-  nodes.hitState.textContent = "已命中";
-  nodes.hitState.className = "state-pill active";
-  nodes.hitTime.textContent = hit.time || "-";
-  nodes.hitProvider.textContent = hit.provider || "-";
-  nodes.hitModel.textContent = hit.model || "-";
-  nodes.hitEmail.textContent = resolvedEmail;
-  nodes.hitAuthFile.textContent = hit.authFile || "-";
-  if (nodes.heroHitState) {
-    nodes.heroHitState.textContent = "已命中";
-    nodes.heroHitState.className = "state-pill active";
-  }
-  if (nodes.heroHitValue) {
-    nodes.heroHitValue.textContent = resolvedEmail;
-  }
-  if (nodes.heroHitDetail) {
-    nodes.heroHitDetail.textContent = `${hit.model || "-"} · ${hit.provider || "-"}`;
-  }
-  if (nodes.heroHitMeta) {
-    nodes.heroHitMeta.textContent = `${hit.time || "-"} · ${hit.authFile || "-"}`;
-  }
-  renderModelState();
-}
-
 function renderModelState() {
   const selectedFullId = String(viewState.selectedModel?.fullId || "");
   const selectedModelId = String(viewState.selectedModel?.modelId || "");
@@ -647,92 +604,46 @@ function renderModelState() {
   if (!selectedModelId) {
     nodes.modelStatePill.textContent = "未配置";
     nodes.modelStatePill.className = "state-pill idle";
-    if (nodes.heroModelState) {
-      nodes.heroModelState.textContent = "未配置";
-      nodes.heroModelState.className = "state-pill idle";
-    }
-    if (nodes.heroModelValue) {
-      nodes.heroModelValue.textContent = "-";
-    }
-    if (nodes.heroModelDetail) {
-      nodes.heroModelDetail.textContent = "默认模型尚未配置";
-    }
-    if (nodes.heroModelMeta) {
-      nodes.heroModelMeta.textContent = "最近实际命中：-";
-    }
     return;
-  }
-
-  if (nodes.heroModelValue) {
-    nodes.heroModelValue.textContent = selectedFullId || selectedModelId;
-  }
-  if (nodes.heroModelMeta) {
-    nodes.heroModelMeta.textContent = `最近实际命中：${latestHitModel || "-"}`;
   }
 
   if (!latestHitModel) {
     nodes.modelStatePill.textContent = "待验证";
     nodes.modelStatePill.className = "state-pill idle";
-    if (nodes.heroModelState) {
-      nodes.heroModelState.textContent = "待验证";
-      nodes.heroModelState.className = "state-pill idle";
-    }
-    if (nodes.heroModelDetail) {
-      nodes.heroModelDetail.textContent = "默认模型已写入，等待真实请求验证";
-    }
     return;
   }
 
   if (latestHitModel === selectedModelId) {
     nodes.modelStatePill.textContent = "已生效";
     nodes.modelStatePill.className = "state-pill active";
-    if (nodes.heroModelState) {
-      nodes.heroModelState.textContent = "已生效";
-      nodes.heroModelState.className = "state-pill active";
-    }
-    if (nodes.heroModelDetail) {
-      nodes.heroModelDetail.textContent = "默认模型与最近命中模型一致";
-    }
     return;
   }
 
   nodes.modelStatePill.textContent = "待生效";
   nodes.modelStatePill.className = "state-pill disabled";
-  if (nodes.heroModelState) {
-    nodes.heroModelState.textContent = "待生效";
-    nodes.heroModelState.className = "state-pill disabled";
-  }
-  if (nodes.heroModelDetail) {
-    nodes.heroModelDetail.textContent = "默认模型已切换，但最近命中仍是旧模型";
-  }
-}
-
-function guessEmailFromAuthFile(fileName) {
-  if (viewState.accountEmailByFile[fileName]) {
-    return viewState.accountEmailByFile[fileName];
-  }
-  const baseName = String(fileName || "")
-    .replace(/^.*[\\/]/, "")
-    .replace(/\.json$/i, "")
-    .replace(/-(added|team)$/i, "");
-  const match = baseName.match(/([a-z0-9._%+-]+@[a-z0-9.-]+\.[a-z]{2,})/i);
-  return match ? match[1] : "";
 }
 
 function parseAuthHit(line) {
-  const match = String(line).match(
-    /^\[([^\]]+)\].*\[AUTH-HIT\]\s+OAuth provider=([^\s]+)\s+auth_file=([^\s]+)\s+for model\s+([^\s]+)/
-  );
-  if (!match) {
-    return null;
+  const text = String(line || "");
+  const patterns = [
+    /^\[([^\]]+)\].*\[AUTH-HIT\]\s+OAuth provider=([^\s]+)\s+auth_file=([^\s]+)\s+for model\s+([^\s]+)/,
+    /^\[([^\]]+)\].*Use OAuth provider=([^\s]+)\s+auth_file=([^\s]+)\s+for model\s+([^\s]+)/
+  ];
+
+  for (const pattern of patterns) {
+    const match = text.match(pattern);
+    if (!match) {
+      continue;
+    }
+    return {
+      time: match[1],
+      provider: match[2],
+      authFile: match[3],
+      model: match[4]
+    };
   }
-  return {
-    time: match[1],
-    provider: match[2],
-    authFile: match[3],
-    model: match[4],
-    email: guessEmailFromAuthFile(match[3])
-  };
+
+  return null;
 }
 
 function rememberLocalSuppressedAuthHits(fileNames, durationMs = 45000) {
@@ -753,11 +664,6 @@ function rememberLocalSuppressedAuthHits(fileNames, durationMs = 45000) {
   viewState.localSuppressedAuthHitWindows = viewState.localSuppressedAuthHitWindows.filter(
     (item) => Number(item?.endMs || 0) >= cutoff
   );
-}
-
-function parseLogTimestampText(line) {
-  const match = String(line || "").match(/^\[([0-9-]{10} [0-9:]{8})\]/);
-  return match ? match[1] : "";
 }
 
 function parseLogTimestamp(line) {
@@ -1021,59 +927,24 @@ function buildAccountRuntimeMap(lines) {
   return runtimeByFile;
 }
 
-function renderHitHistory(hits) {
-  const list = Array.isArray(hits) ? hits : [];
-  viewState.recentAuthHits = list;
-  if (!nodes.hitHistoryList || !nodes.historyState) {
-    return;
-  }
-
-  if (!list.length) {
-    nodes.historyState.textContent = "暂无";
-    nodes.historyState.className = "state-pill idle";
-    nodes.hitHistoryList.innerHTML = `<div class="history-empty">最近没有命中记录</div>`;
-    return;
-  }
-
-  nodes.historyState.textContent = `${list.length} 条`;
-  nodes.historyState.className = "state-pill active";
-  nodes.hitHistoryList.innerHTML = list
-    .map((hit) => {
-      return `
-        <article class="history-card">
-          <div class="history-top">
-            <span class="history-model">${hit.model || "-"}</span>
-            <span class="history-time">${hit.time || "-"}</span>
-          </div>
-          <div class="history-meta">
-            <div>provider: ${hit.provider || "-"}</div>
-            <div>email: ${guessEmailFromAuthFile(hit.authFile) || hit.email || "-"}</div>
-            <div>file: ${hit.authFile || "-"}</div>
-          </div>
-        </article>
-      `;
-    })
-    .join("");
-}
-
 function shouldKeepLogLine(line) {
   const text = String(line || "");
   if (!text) {
     return false;
   }
+  if (/AUTH-HIT/i.test(text)) {
+    return false;
+  }
   if (/\[(warn|error)\s*\]/i.test(text)) {
     return true;
   }
-  if (/AUTH-(MISS|FAIL|INVALID)/i.test(text)) {
+  if (/rate limit|invalidated oauth|token has been invalidated|timeout|deadline exceeded|failed|panic|fatal/i.test(text)) {
     return true;
   }
-  if (/rate limit|invalidated oauth|timeout|failed|panic|fatal/i.test(text)) {
+  if (/gin_logger\.go:\d+\].*\b(401|403|408|409|429|500|502|503)\b/.test(text)) {
     return true;
   }
-  if (/gin_logger\.go:\d+\].*\b(401|403|409|429|500|502|503)\b/.test(text)) {
-    return true;
-  }
-  if (/gin_logger\.go:\d+\].*\b(200|404)\b/.test(text)) {
+  if (/gin_logger\.go:\d+\].*\b(200|204|304|404)\b/.test(text)) {
     return false;
   }
   if (/\[debug\]/i.test(text)) {
@@ -1109,14 +980,13 @@ function renderLogs(payload) {
   const anchor = datedLines.length ? datedLines[datedLines.length - 1].timestamp : null;
   const recentLines = visibleLines.filter((line) => isWithinRecentWindow(parseLogTimestamp(line), anchor));
   viewState.accountRuntimeByFile = buildAccountRuntimeMap(recentLines);
-  const latestFirst = visibleLines.slice().reverse();
-  const recentAuthHits = recentLines
+  const latestAuthHit = visibleLines
     .slice()
     .reverse()
     .map(parseAuthHit)
-    .filter(Boolean);
-  const authHits = latestFirst.map(parseAuthHit).filter(Boolean);
-  const latestAuthHit = authHits[0] || null;
+    .find(Boolean) || null;
+  viewState.latestAuthHit = latestAuthHit;
+  renderModelState();
   const filtered = collapseAlertItems(
     recentLines
       .slice()
@@ -1126,8 +996,6 @@ function renderLogs(payload) {
       .filter(Boolean)
   ).slice(0, 8);
 
-  renderLatestAuthHit(latestAuthHit);
-  renderHitHistory((recentAuthHits.length ? recentAuthHits : authHits).slice(0, 5));
   if (viewState.accounts.length) {
     renderAccounts({ accounts: viewState.accounts });
   } else {
@@ -1144,8 +1012,6 @@ function renderLogs(payload) {
         )
       ].join("\n")
     );
-  } else if (!latestAuthHit) {
-    sections.push("最近没有可展示的关键日志");
   } else {
     sections.push("近10分钟没有异常或告警日志");
   }
@@ -1202,169 +1068,6 @@ async function refreshConfig() {
 async function refreshLogs() {
   const payload = await api("/api/logs?lines=180");
   renderLogs(payload);
-}
-
-async function checkGeminiAuthStatus(options = {}) {
-  const state = String(viewState.geminiAuth.state || "").trim();
-  if (!state) {
-    if (!options.silent) {
-      showToast("先发起 Gemini CLI 登录", true);
-    }
-    return;
-  }
-
-  const payload = await api(`/api/gemini-cli/oauth/status?state=${encodeURIComponent(state)}`);
-  const status = String(payload?.status || "ok").trim().toLowerCase();
-
-  if (status === "wait") {
-    setGeminiAuthState("等待授权", "warnish");
-    setGeminiAuthOutput([
-      "[gemini cli oauth]",
-      `state: ${state}`,
-      `project_id: ${viewState.geminiAuth.projectId || "auto"}`,
-      "status: waiting",
-      "",
-      "浏览器完成 Google 授权后，这里会自动刷新。",
-      "如果自动回跳失败，可以把最后的回调地址粘贴到下方手动提交。"
-    ]);
-    scheduleGeminiAuthPoll();
-    return;
-  }
-
-  clearGeminiAuthPolling();
-
-  if (status === "error") {
-    setGeminiAuthState("登录失败", "bad");
-    setGeminiAuthOutput([
-      "[gemini cli oauth]",
-      `state: ${state}`,
-      `project_id: ${viewState.geminiAuth.projectId || "auto"}`,
-      "status: error",
-      `error: ${payload?.error || "unknown error"}`
-    ]);
-    showToast("Gemini CLI 登录失败", true);
-    return;
-  }
-
-  setGeminiAuthState("登录完成", "active");
-  setGeminiAuthOutput([
-    "[gemini cli oauth]",
-    `state: ${state}`,
-    `project_id: ${viewState.geminiAuth.projectId || "auto"}`,
-    "status: ok",
-    "认证已写入 auth 目录，正在刷新账号与模型。"
-  ]);
-  await Promise.allSettled([refreshAccounts(), refreshModels(), refreshHealth(), refreshLogs()]);
-  showToast("Gemini CLI 登录完成");
-}
-
-async function runGeminiAuthStart() {
-  const projectId = String(nodes.geminiProjectId?.value || "").trim();
-
-  try {
-    const suffix = projectId ? `?projectId=${encodeURIComponent(projectId)}` : "";
-    const payload = await api(`/api/gemini-cli/oauth/start${suffix}`);
-    const authURL = String(payload?.url || "").trim();
-    const state = String(payload?.state || "").trim();
-
-    if (!authURL || !state) {
-      throw new Error("登录入口没有返回 url/state");
-    }
-
-    viewState.geminiAuth.state = state;
-    viewState.geminiAuth.url = authURL;
-    viewState.geminiAuth.projectId = projectId;
-    setGeminiAuthLink(authURL);
-    setGeminiAuthState("等待授权", "warnish");
-    setGeminiAuthOutput([
-      "[gemini cli oauth]",
-      `state: ${state}`,
-      `project_id: ${projectId || "auto"}`,
-      `url: ${authURL}`,
-      "",
-      "已生成 Google 授权链接。",
-      "请点击上方“打开 Google 登录页”，并在当前浏览器完成授权。",
-      "浏览器完成授权后这里会自动轮询状态。"
-    ]);
-    showToast("Gemini CLI 登录链接已生成");
-    scheduleGeminiAuthPoll(1200);
-  } catch (error) {
-    setGeminiAuthState("启动失败", "bad");
-    setGeminiAuthOutput(String(error.message || error));
-    showToast("Gemini CLI 登录入口不可用", true);
-  }
-}
-
-async function runGeminiAuthSubmitCallback() {
-  const redirectURL = String(nodes.geminiAuthCallback?.value || "").trim();
-  if (!redirectURL) {
-    showToast("先粘贴完整回调地址", true);
-    return;
-  }
-
-  try {
-    await api("/api/gemini-cli/oauth/callback", {
-      method: "POST",
-      body: JSON.stringify({
-        redirectURL,
-        state: String(viewState.geminiAuth.state || ""),
-        projectId: String(viewState.geminiAuth.projectId || "")
-      })
-    });
-    nodes.geminiAuthCallback.value = "";
-    setGeminiAuthState("回调已提交", "warnish");
-    setGeminiAuthOutput([
-      "[gemini cli oauth]",
-      `state: ${viewState.geminiAuth.state || "-"}`,
-      `project_id: ${viewState.geminiAuth.projectId || "auto"}`,
-      "status: callback submitted",
-      "正在等待服务完成 token 交换。"
-    ]);
-    scheduleGeminiAuthPoll(1000);
-    showToast("手动回调已提交");
-  } catch (error) {
-    setGeminiAuthState("回调失败", "bad");
-    setGeminiAuthOutput(String(error.message || error));
-    showToast("手动回调提交失败", true);
-  }
-}
-
-async function runGeminiTokenImport() {
-  const rawInput = String(nodes.geminiTokenInput?.value || "").trim();
-  if (!rawInput) {
-    showToast("先粘贴 Gemini token 或 JSON", true);
-    return;
-  }
-
-  try {
-    const projectId = String(nodes.geminiProjectId?.value || "").trim();
-    const payload = await api("/api/gemini-cli/token", {
-      method: "POST",
-      body: JSON.stringify({
-        raw: rawInput,
-        projectId
-      })
-    });
-
-    if (nodes.geminiTokenInput) {
-      nodes.geminiTokenInput.value = "";
-    }
-    setGeminiAuthState("手动导入完成", "good");
-    setGeminiAuthOutput([
-      "[gemini cli token]",
-      `file: ${payload?.imported?.fileName || "-"}`,
-      `project_id: ${payload?.imported?.projectId || projectId || "auto"}`,
-      `email: ${payload?.imported?.email || "-"}`,
-      `replaced: ${payload?.imported?.replacedExisting ? "yes" : "no"}`,
-      "token 已写入 auth 目录，正在刷新账号与模型。"
-    ]);
-    await Promise.allSettled([refreshAccounts(), refreshModels(), refreshHealth(), refreshLogs()]);
-    showToast("Gemini token 已保存");
-  } catch (error) {
-    setGeminiAuthState("手动导入失败", "bad");
-    setGeminiAuthOutput(String(error.message || error));
-    showToast("Gemini token 导入失败", true);
-  }
 }
 
 async function refreshAll() {
@@ -1437,7 +1140,25 @@ async function runSync() {
   }
 }
 
+function confirmServiceAction(action) {
+  if (action === "start") {
+    return true;
+  }
+  if (action === "restart") {
+    return window.confirm("确认重启代理服务？这会短暂中断当前请求。");
+  }
+  if (action === "stop") {
+    const keyword = window.prompt("停止服务属于危险操作，请输入 STOP 确认：", "");
+    return String(keyword || "").trim().toUpperCase() === "STOP";
+  }
+  return true;
+}
+
 async function runServiceAction(action) {
+  if (!confirmServiceAction(action)) {
+    showToast("已取消操作");
+    return;
+  }
   try {
     const payload = await api("/api/actions/service", {
       method: "POST",
@@ -1502,6 +1223,82 @@ async function runImportAccount() {
   } catch (error) {
     setOutput(String(error.message || error));
     showToast("账号写入失败", true);
+  }
+}
+
+async function runFetchAccountUsage(file) {
+  try {
+    const payload = await api(`/api/accounts/${encodeURIComponent(file)}/usage`, {
+      method: "POST"
+    });
+    const usage = payload?.usage || null;
+    if (usage?.file) {
+      viewState.accountUsageByFile[usage.file] = usage;
+    }
+    renderAccounts({ accounts: viewState.accounts });
+    setOutput(
+      [
+        "[account usage]",
+        `file: ${usage?.file || file}`,
+        `status: ${usage?.status || "-"}`,
+        `label: ${usage?.label || "-"}`,
+        `detail: ${usage?.detail || "-"}`,
+        `checked: ${usage?.checkedAt || "-"}`
+      ].join("\n")
+    );
+    showToast(usage?.ok ? "用量查询成功" : `用量查询结果: ${usage?.label || "失败"}`, !usage?.ok);
+  } catch (error) {
+    setOutput(String(error.message || error));
+    showToast("用量查询失败", true);
+  }
+}
+
+async function runFetchAllAccountUsage() {
+  try {
+    openVerifyAllModal(
+      [
+        "[account usage all]",
+        `started: ${new Date().toLocaleString()}`,
+        "status: running",
+        "正在逐个查询账号用量，请稍候..."
+      ].join("\n")
+    );
+
+    const payload = await api("/api/accounts/usage-all", {
+      method: "POST"
+    });
+    const usages = Array.isArray(payload?.usages) ? payload.usages : [];
+    for (const item of usages) {
+      if (item?.file) {
+        viewState.accountUsageByFile[item.file] = item;
+      }
+    }
+    renderAccounts({ accounts: viewState.accounts });
+    const report = [
+      "[account usage all]",
+      `finished: ${new Date().toLocaleString()}`,
+      `total: ${usages.length}`,
+      ...usages.map((item) => `${item.file} | ${item.status || "-"} | ${item.label || "-"} | ${item.detail || "-"}`)
+    ].join("\n");
+    setOutput(report);
+    setVerifyAllModalOutput(report);
+    const failedCount = usages.filter((item) => !item.ok).length;
+    showToast(
+      failedCount ? `已查询 ${usages.length} 个账号，异常 ${failedCount} 个` : `已查询 ${usages.length} 个账号用量`,
+      failedCount > 0
+    );
+  } catch (error) {
+    const message = String(error.message || error);
+    setOutput(message);
+    openVerifyAllModal(
+      [
+        "[account usage all]",
+        `finished: ${new Date().toLocaleString()}`,
+        "status: failed",
+        message
+      ].join("\n")
+    );
+    showToast("批量用量查询失败", true);
   }
 }
 
@@ -1634,16 +1431,13 @@ function bindActions() {
   $("btn-sync").addEventListener("click", runSync);
   $("btn-import-account").addEventListener("click", runImportAccount);
   nodes.verifyAllAccounts?.addEventListener("click", runVerifyAllAccounts);
+  nodes.usageAllAccounts?.addEventListener("click", runFetchAllAccountUsage);
   nodes.verifyAllModalClose?.addEventListener("click", closeVerifyAllModal);
   nodes.verifyAllModal?.addEventListener("click", (event) => {
     if (event.target === nodes.verifyAllModal) {
       closeVerifyAllModal();
     }
   });
-  nodes.geminiAuthStart?.addEventListener("click", runGeminiAuthStart);
-  nodes.geminiAuthCheck?.addEventListener("click", () => checkGeminiAuthStatus({ silent: false }));
-  nodes.geminiAuthSubmitCallback?.addEventListener("click", runGeminiAuthSubmitCallback);
-  nodes.geminiTokenImport?.addEventListener("click", runGeminiTokenImport);
   nodes.importClearTarget?.addEventListener("click", () => {
     viewState.importTargetFile = "";
     renderImportTarget();
@@ -1661,28 +1455,13 @@ function bindActions() {
     }
     await selectModel(button.dataset.modelId || "");
   });
-  nodes.accounts.addEventListener("click", async (event) => {
-    const button = event.target.closest("button[data-action]");
-    if (!button) {
-      return;
-    }
-    const file = button.dataset.file || "";
-    const action = button.dataset.action || "";
-    if (action === "toggle-disabled") {
-      await runToggleAccount(file, button.dataset.disabled === "true");
-      return;
-    }
-    if (action === "verify-account") {
-      await runVerifyAccount(file);
-      return;
-    }
-    if (action === "prepare-reauth") {
-      prepareReauth(file);
-      return;
-    }
-    if (action === "delete-account") {
-      await runDeleteAccount(file);
-    }
+  nodes.globalSearch?.addEventListener("input", () => {
+    viewState.searchQuery = String(nodes.globalSearch?.value || "").trim();
+    renderAccounts({ accounts: viewState.accounts });
+    renderModels({
+      ids: viewState.modelIds,
+      selected: viewState.selectedModel
+    });
   });
   nodes.invalidAccountsList?.addEventListener("click", async (event) => {
     const button = event.target.closest("button[data-action]");
@@ -1691,8 +1470,8 @@ function bindActions() {
     }
     const file = button.dataset.file || "";
     const action = button.dataset.action || "";
-    if (action === "verify-account") {
-      await runVerifyAccount(file);
+    if (action === "usage-account") {
+      await runFetchAccountUsage(file);
       return;
     }
     if (action === "prepare-reauth") {
